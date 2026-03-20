@@ -61,7 +61,7 @@ public sealed class X11ActiveWindowMonitor : IDisposable
         // Replace the default error handler (which calls exit()) with one that
         // tolerates BadWindow — windows can be destroyed while we still hold a
         // reference, and that should never kill the service.
-        _errorHandler = (IntPtr _, ref XErrorEvent e) =>
+        _errorHandler = (IntPtr _, ref XErrorEvent e) =>  
         {
             const byte BadWindow = 3;
             if (e.error_code != BadWindow)
