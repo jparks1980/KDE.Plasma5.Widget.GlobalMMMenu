@@ -98,8 +98,56 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter) : Backg
 
                 if (string.IsNullOrEmpty(service) || string.IsNullOrEmpty(path) || path == "/")
                 {
-                    logger.LogDebug("  0x{W:X8}: no menu", windowId);
-                    continue;
+                    logger.LogDebug("  0x{W:X8}: no menu on first check — polling up to 2 s", windowId);
+
+                    // New/detached windows (e.g. browser tabs torn off) may not have
+                    // registered their menu yet. Poll every 250 ms for up to 2 seconds
+                    // without touching the rest of the loop — a new focus event cancels
+                    // this naturally when the channel receives the next window ID.
+                    using var pollCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                    pollCts.CancelAfter(TimeSpan.FromSeconds(2));
+                    try
+                    {
+                        while (!pollCts.Token.IsCancellationRequested)
+                        {
+                            await Task.Delay(250, pollCts.Token);
+
+                            // Check if the channel already has a newer window waiting —
+                            // no point continuing to poll for a window we've left.
+                            if (channel.Reader.TryPeek(out _)) break;
+
+                            // Re-read X11 props first (fastest path).
+                            var (ps, pp) = x11.GetWindowMenuInfo((IntPtr)windowId);
+                            if (!string.IsNullOrEmpty(ps) && !string.IsNullOrEmpty(pp) && pp != "/")
+                            {
+                                service = ps;
+                                path    = pp;
+                                logger.LogDebug("  0x{W:X8}: menu appeared via X11 poll", windowId);
+                                break;
+                            }
+
+                            // Also retry the registrar.
+                            try
+                            {
+                                var (rs, rp) = await registrar.GetMenuForWindowAsync(windowId);
+                                if (!string.IsNullOrEmpty(rs) && rp != new ObjectPath("/"))
+                                {
+                                    service = rs;
+                                    path    = rp.ToString();
+                                    logger.LogDebug("  0x{W:X8}: menu appeared via registrar poll", windowId);
+                                    break;
+                                }
+                            }
+                            catch { /* still not registered */ }
+                        }
+                    }
+                    catch (OperationCanceledException) { /* poll timeout or stop — fall through */ }
+
+                    if (string.IsNullOrEmpty(service) || string.IsNullOrEmpty(path) || path == "/")
+                    {
+                        logger.LogDebug("  0x{W:X8}: no menu after polling", windowId);
+                        continue;
+                    }
                 }
 
                 logger.LogInformation("  Menu: service={S}  path={P}", service, path);

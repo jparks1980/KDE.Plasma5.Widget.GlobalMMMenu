@@ -130,7 +130,7 @@ public sealed class X11ActiveWindowMonitor : IDisposable
     /// from a window's X11 properties. Returns nulls if not set.
     /// Must be called from the same thread that owns _display.
     /// </summary>
-    private (string? Service, string? Path) GetWindowMenuInfo(IntPtr window)
+    internal (string? Service, string? Path) GetWindowMenuInfo(IntPtr window)
     {
         string? service = ReadStringProperty(window, _kdeNetWmAppmenuServiceNameAtom);
         string? path    = ReadStringProperty(window, _kdeNetWmAppmenuObjectPathAtom);
