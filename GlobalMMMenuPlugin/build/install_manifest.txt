@@ -1,0 +1,4 @@
+/usr/lib/x86_64-linux-gnu/qt5/qml/com/kde/plasma/globalmenu/libglobalmenuhelper.so
+/usr/lib/x86_64-linux-gnu/qt5/qml/com/kde/plasma/globalmenu/qmldir
+/home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/com/kde/plasma/globalmenu/libglobalmenuhelper.so
+/home/joshd/.local/share/plasma/plasmoids/com.github.globalmmmenu/com/kde/plasma/globalmenu/libglobalmenuhelper.so

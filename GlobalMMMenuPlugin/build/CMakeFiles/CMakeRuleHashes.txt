@@ -1,0 +1,4 @@
+# Hashes of file build rules.
+e93bca8292f3fb690c5c42104ad13b39 CMakeFiles/globalmenuhelper_autogen
+e93bca8292f3fb690c5c42104ad13b39 CMakeFiles/globalmenuhelper_autogen_timestamp_deps
+c10454fdde1710adfa73869a59aab701 globalmenuhelper_autogen/timestamp

@@ -1,0 +1,22 @@
+{
+    "KPlugin": {
+        "Authors": [
+            {
+                "Email": "",
+                "Name": ""
+            }
+        ],
+        "Category": "Windows and Tasks",
+        "Description": "Displays the global menu bar for the active window, sourced from the GlobalMMMenu D-Bus service.",
+        "Icon": "application-menu",
+        "Id": "com.kde.plasma.globalmmenu",
+        "License": "GPL-2.0-or-later",
+        "Name": "Global MM Menu",
+        "ServiceTypes": [
+            "Plasma/Applet"
+        ],
+        "Version": "1.0"
+    },
+    "X-Plasma-API": "declarativeappletscript",
+    "X-Plasma-MainScript": "ui/main.qml"
+}

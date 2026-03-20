@@ -1,0 +1,638 @@
+Checking screens: available: (QScreen(0x6108b6f75a90, name="DisplayPort-0"), QScreen(0x6108b6f75b80, name="DisplayPort-1")) redundant: QHash() fake: QSet() all: (QScreen(0x6108b6f75a90, name="DisplayPort-0"), QScreen(0x6108b6f75b80, name="DisplayPort-1"))
+Checking screens: available: (QScreen(0x6108b6f75a90, name="DisplayPort-0"), QScreen(0x6108b6f75b80, name="DisplayPort-1")) redundant: QHash() fake: QSet() all: (QScreen(0x6108b6f75a90, name="DisplayPort-0"), QScreen(0x6108b6f75b80, name="DisplayPort-1"))
+kf.plasma.quick: Applet preload policy set to 1
+file:///usr/lib/x86_64-linux-gnu/qt5/qml/org/kde/kirigami.2/templates/InlineMessage.qml:265:13: QML SelectableLabel: Binding loop detected for property "implicitWidth"
+file:///usr/share/plasma/plasmoids/org.kde.desktopcontainment/contents/ui/main.qml: QML Containment (parent or ancestor of Wallpaper): grabToImage: item's window is not visible
+file:///usr/share/plasma/plasmoids/org.kde.desktopcontainment/contents/ui/main.qml: QML Containment (parent or ancestor of Wallpaper): grabToImage: item's window is not visible
+file:///usr/lib/x86_64-linux-gnu/qt5/qml/org/kde/kirigami.2/templates/InlineMessage.qml:265:13: QML SelectableLabel: Binding loop detected for property "implicitWidth"
+QObject::connect: No such slot DesktopProtocol::_k_slotRedirection(KIO::Job *, QUrl)
+org.kde.plasma.kicker: DragHelper is deprecated and will be removed in Plasma 6. Use Qt Quick Drag instead.
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:152:5: QML Connections: Implicitly defined onFoo properties in Connections are deprecated. Use this syntax instead: function onFoo(<arguments>) { ... }
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:136:5: QML Connections: Implicitly defined onFoo properties in Connections are deprecated. Use this syntax instead: function onFoo(<arguments>) { ... }
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:144:5: QML Connections: Implicitly defined onFoo properties in Connections are deprecated. Use this syntax instead: function onFoo(<arguments>) { ... }
+file:///home/joshd/.local/share/plasma/plasmoids/org.kde.activeApplication/contents/ui/main.qml:37: TypeError: Cannot read property 'left' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/CompactRepresentation.qml:54: TypeError: Cannot read property 'height' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/CompactRepresentation.qml:68:5: QML Connections: Implicitly defined onFoo properties in Connections are deprecated. Use this syntax instead: function onFoo(<arguments>) { ... }
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/MainColumnItem.qml:452:9: QML Button: Binding loop detected for property "icon.width"
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/MainColumnItem.qml:248:5: QML Button: Binding loop detected for property "icon.width"
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+Cyclic dependency detected between "file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml" and "file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/NotificationHeader.qml"
+Cyclic dependency detected between "file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml" and "file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/ThumbnailStrip.qml"
+file:///usr/share/plasma/plasmoids/org.kde.plasma.networkmanagement/contents/ui/main.qml:95: TypeError: Cannot read property 'airplaneModeAvailable' of null
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Property 'cleanLabel' of object QQuickItem_QML_548(0x6108b8d6db60) is not a function
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Property 'cleanLabel' of object QQuickItem_QML_548(0x6108b8d6db60) is not a function
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Property 'cleanLabel' of object QQuickItem_QML_548(0x6108b8d6db60) is not a function
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Property 'cleanLabel' of object QQuickItem_QML_548(0x6108b8d6db60) is not a function
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Property 'cleanLabel' of object QQuickItem_QML_548(0x6108b8d6db60) is not a function
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Property 'cleanLabel' of object QQuickItem_QML_548(0x6108b8d6db60) is not a function
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Type error
+Could not find the Plasmoid for Plasma::FrameSvgItem(0x6108bc2986b0) QQmlContext(0x6108b8ed2b20) QUrl("file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml")
+Could not find the Plasmoid for Plasma::FrameSvgItem(0x6108bc2986b0) QQmlContext(0x6108b8ed2b20) QUrl("file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml")
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:165: TypeError: Type error
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:145: TypeError: Type error
+Checking screens: available: (QScreen(0x5be6f16f3a90, name="DisplayPort-0"), QScreen(0x5be6f16f3b80, name="DisplayPort-1")) redundant: QHash() fake: QSet() all: (QScreen(0x5be6f16f3a90, name="DisplayPort-0"), QScreen(0x5be6f16f3b80, name="DisplayPort-1"))
+Checking screens: available: (QScreen(0x5be6f16f3a90, name="DisplayPort-0"), QScreen(0x5be6f16f3b80, name="DisplayPort-1")) redundant: QHash() fake: QSet() all: (QScreen(0x5be6f16f3a90, name="DisplayPort-0"), QScreen(0x5be6f16f3b80, name="DisplayPort-1"))
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:20: TypeError: Cannot read property 'pluginName' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:75: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:78: TypeError: Cannot read property 'pluginName' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:80: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:81: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:82: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:83: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:84: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:16: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:17: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:18: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:20: TypeError: Cannot read property 'pluginName' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:75: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:78: TypeError: Cannot read property 'pluginName' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:80: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:81: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:82: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:83: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:84: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:16: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:17: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:18: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml:301: TypeError: Cannot read property 'Window' of null
+file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml:407: TypeError: Cannot read property 'Window' of null
+file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml:0: RangeError: Maximum call stack size exceeded.
+file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml:0: RangeError: Maximum call stack size exceeded.
+file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml:0: RangeError: Maximum call stack size exceeded.
+file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml:0: RangeError: Maximum call stack size exceeded.
+file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml:0: RangeError: Maximum call stack size exceeded.
+file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml:0: RangeError: Maximum call stack size exceeded.
+file:///usr/share/plasma/plasmoids/org.kde.plasma.volume/contents/ui/main.qml:775: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/plasmoids/org.kde.plasma.networkmanagement/contents/ui/main.qml:151: TypeError: Cannot read property 'expanded' of null
+file:///usr/share/plasma/packages/org.kde.paneltoolbox/contents/ui/main.qml:17: TypeError: Cannot read property 'formFactor' of null
+file:///usr/share/plasma/packages/org.kde.paneltoolbox/contents/ui/main.qml:100: TypeError: Cannot read property 'editMode' of null
+file:///usr/share/plasma/packages/org.kde.paneltoolbox/contents/ui/main.qml:45: TypeError: Cannot read property 'editMode' of null
+file:///usr/share/plasma/packages/org.kde.paneltoolbox/contents/ui/main.qml:34: TypeError: Cannot read property 'editMode' of null
+kf.plasma.quick: Applet preload policy set to 1
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:168: TypeError: Cannot read property 'configuration' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:153: TypeError: Cannot read property 'configuration' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:68: TypeError: Cannot read property 'configuration' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:115: TypeError: Cannot read property 'configuration' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:144:5: QML Connections: Implicitly defined onFoo properties in Connections are deprecated. Use this syntax instead: function onFoo(<arguments>) { ... }
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/MenuRepresentation.qml:71: TypeError: Cannot call method 'reset' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/MenuRepresentation.qml:151: TypeError: Cannot call method 'reload' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:77: TypeError: Cannot read property 'configuration' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:78: TypeError: Cannot read property 'configuration' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:79: TypeError: Cannot read property 'configuration' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:80: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+org.kde.plasma.pulseaudio: No object for name "alsa_output.pci-0000_2d_00.4.analog-stereo"
+org.kde.plasma.pulseaudio: No object for name "alsa_output.pci-0000_2d_00.4.analog-stereo"
+org.kde.plasma.pulseaudio: No object for name "alsa_output.pci-0000_2d_00.4.analog-stereo"
+org.kde.plasma.pulseaudio: No object for name "alsa_input.usb-webcamvendor_NexiGo_N60_FHD_Webcam_Jan_29_2024-10_32_28-N60-02.mono-fallback"
+org.kde.plasma.pulseaudio: No object for name "alsa_output.pci-0000_2d_00.4.analog-stereo"
+org.kde.plasma.pulseaudio: No object for name "alsa_input.usb-webcamvendor_NexiGo_N60_FHD_Webcam_Jan_29_2024-10_32_28-N60-02.mono-fallback"
+file:///usr/lib/x86_64-linux-gnu/qt5/qml/org/kde/kirigami.2/templates/InlineMessage.qml:265:13: QML SelectableLabel: Binding loop detected for property "implicitWidth"
+file:///usr/share/plasma/plasmoids/org.kde.desktopcontainment/contents/ui/main.qml: QML Containment (parent or ancestor of Wallpaper): grabToImage: item's window is not visible
+file:///usr/share/plasma/plasmoids/org.kde.desktopcontainment/contents/ui/main.qml: QML Containment (parent or ancestor of Wallpaper): grabToImage: item's window is not visible
+file:///usr/lib/x86_64-linux-gnu/qt5/qml/org/kde/kirigami.2/templates/InlineMessage.qml:265:13: QML SelectableLabel: Binding loop detected for property "implicitWidth"
+QObject::connect: No such slot DesktopProtocol::_k_slotRedirection(KIO::Job *, QUrl)
+org.kde.plasma.kicker: DragHelper is deprecated and will be removed in Plasma 6. Use Qt Quick Drag instead.
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:152:5: QML Connections: Implicitly defined onFoo properties in Connections are deprecated. Use this syntax instead: function onFoo(<arguments>) { ... }
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:136:5: QML Connections: Implicitly defined onFoo properties in Connections are deprecated. Use this syntax instead: function onFoo(<arguments>) { ... }
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:144:5: QML Connections: Implicitly defined onFoo properties in Connections are deprecated. Use this syntax instead: function onFoo(<arguments>) { ... }
+file:///home/joshd/.local/share/plasma/plasmoids/org.kde.activeApplication/contents/ui/main.qml:37: TypeError: Cannot read property 'left' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/CompactRepresentation.qml:54: TypeError: Cannot read property 'height' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/CompactRepresentation.qml:68:5: QML Connections: Implicitly defined onFoo properties in Connections are deprecated. Use this syntax instead: function onFoo(<arguments>) { ... }
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/MainColumnItem.qml:452:9: QML Button: Binding loop detected for property "icon.width"
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/MainColumnItem.qml:248:5: QML Button: Binding loop detected for property "icon.width"
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+Cyclic dependency detected between "file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml" and "file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/ThumbnailStrip.qml"
+Cyclic dependency detected between "file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml" and "file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/NotificationHeader.qml"
+file:///usr/share/plasma/plasmoids/org.kde.plasma.networkmanagement/contents/ui/main.qml:95: TypeError: Cannot read property 'airplaneModeAvailable' of null
+Could not find the Plasmoid for Plasma::FrameSvgItem(0x5be6f681f860) QQmlContext(0x5be6f55997d0) QUrl("file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml")
+Could not find the Plasmoid for Plasma::FrameSvgItem(0x5be6f681f860) QQmlContext(0x5be6f55997d0) QUrl("file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml")
+Could not find the Plasmoid for Plasma::FrameSvgItem(0x5be6f68f5740) QQmlContext(0x5be6f55997d0) QUrl("file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml")
+Could not find the Plasmoid for Plasma::FrameSvgItem(0x5be6f68f5740) QQmlContext(0x5be6f55997d0) QUrl("file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml")
+trying to show an empty dialog
+Hspell: can't open /usr/share/hspell/hebrew.wgz.sizes.
+kf.sonnet.clients.hspell: HSpellDict::HSpellDict: Init failed
+org.kde.plasma.pulseaudio: No object for name "alsa_output.pci-0000_2d_00.4.analog-stereo"
+org.kde.plasma.pulseaudio: No object for name "alsa_output.pci-0000_2d_00.4.analog-stereo"
+org.kde.plasma.pulseaudio: No object for name "alsa_input.usb-webcamvendor_NexiGo_N60_FHD_Webcam_Jan_29_2024-10_32_28-N60-02.mono-fallback"
+org.kde.plasma.pulseaudio: No object for name "alsa_output.pci-0000_2d_00.4.analog-stereo"
+org.kde.plasma.pulseaudio: No object for name "alsa_input.usb-webcamvendor_NexiGo_N60_FHD_Webcam_Jan_29_2024-10_32_28-N60-02.mono-fallback"
+org.kde.plasma.pulseaudio: No object for name "alsa_output.pci-0000_2d_00.4.analog-stereo"
+org.kde.plasma.pulseaudio: No object for name "alsa_output.pci-0000_2d_00.4.analog-stereo"
+Could not find the Plasmoid for Plasma::FrameSvgItem(0x5be6f5e4fab0) QQmlContext(0x5be6f55997d0) QUrl("file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml")
+Could not find the Plasmoid for Plasma::FrameSvgItem(0x5be6f5e4fab0) QQmlContext(0x5be6f55997d0) QUrl("file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml")
+Checking screens: available: (QScreen(0x5c00ea776a90, name="DisplayPort-0"), QScreen(0x5c00ea776b80, name="DisplayPort-1")) redundant: QHash() fake: QSet() all: (QScreen(0x5c00ea776a90, name="DisplayPort-0"), QScreen(0x5c00ea776b80, name="DisplayPort-1"))
+Checking screens: available: (QScreen(0x5c00ea776a90, name="DisplayPort-0"), QScreen(0x5c00ea776b80, name="DisplayPort-1")) redundant: QHash() fake: QSet() all: (QScreen(0x5c00ea776a90, name="DisplayPort-0"), QScreen(0x5c00ea776b80, name="DisplayPort-1"))
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:20: TypeError: Cannot read property 'pluginName' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:75: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:78: TypeError: Cannot read property 'pluginName' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:80: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:81: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:82: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:83: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:84: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:16: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:17: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:18: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:20: TypeError: Cannot read property 'pluginName' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:75: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:78: TypeError: Cannot read property 'pluginName' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:80: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:81: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:82: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:83: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:84: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:16: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:17: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:18: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml:301: TypeError: Cannot read property 'Window' of null
+file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml:407: TypeError: Cannot read property 'Window' of null
+file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml:0: RangeError: Maximum call stack size exceeded.
+file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml:0: RangeError: Maximum call stack size exceeded.
+file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml:0: RangeError: Maximum call stack size exceeded.
+file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml:0: RangeError: Maximum call stack size exceeded.
+file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml:0: RangeError: Maximum call stack size exceeded.
+file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml:0: RangeError: Maximum call stack size exceeded.
+file:///usr/share/plasma/plasmoids/org.kde.plasma.volume/contents/ui/main.qml:775: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/plasmoids/org.kde.plasma.networkmanagement/contents/ui/main.qml:151: TypeError: Cannot read property 'expanded' of null
+file:///usr/share/plasma/packages/org.kde.paneltoolbox/contents/ui/main.qml:17: TypeError: Cannot read property 'formFactor' of null
+file:///usr/share/plasma/packages/org.kde.paneltoolbox/contents/ui/main.qml:100: TypeError: Cannot read property 'editMode' of null
+file:///usr/share/plasma/packages/org.kde.paneltoolbox/contents/ui/main.qml:45: TypeError: Cannot read property 'editMode' of null
+file:///usr/share/plasma/packages/org.kde.paneltoolbox/contents/ui/main.qml:34: TypeError: Cannot read property 'editMode' of null
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+kf.plasma.quick: Applet preload policy set to 1
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:168: TypeError: Cannot read property 'configuration' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:153: TypeError: Cannot read property 'configuration' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:68: TypeError: Cannot read property 'configuration' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:115: TypeError: Cannot read property 'configuration' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:144:5: QML Connections: Implicitly defined onFoo properties in Connections are deprecated. Use this syntax instead: function onFoo(<arguments>) { ... }
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/MenuRepresentation.qml:71: TypeError: Cannot call method 'reset' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/MenuRepresentation.qml:151: TypeError: Cannot call method 'reload' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:77: TypeError: Cannot read property 'configuration' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:78: TypeError: Cannot read property 'configuration' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:79: TypeError: Cannot read property 'configuration' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:80: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+org.kde.plasma.pulseaudio: No object for name "alsa_output.pci-0000_2d_00.4.analog-stereo"
+org.kde.plasma.pulseaudio: No object for name "alsa_output.pci-0000_2d_00.4.analog-stereo"
+org.kde.plasma.pulseaudio: No object for name "alsa_output.pci-0000_2d_00.4.analog-stereo"
+org.kde.plasma.pulseaudio: No object for name "alsa_input.usb-webcamvendor_NexiGo_N60_FHD_Webcam_Jan_29_2024-10_32_28-N60-02.mono-fallback"
+file:///usr/lib/x86_64-linux-gnu/qt5/qml/org/kde/kirigami.2/templates/InlineMessage.qml:265:13: QML SelectableLabel: Binding loop detected for property "implicitWidth"
+file:///usr/share/plasma/plasmoids/org.kde.desktopcontainment/contents/ui/main.qml: QML Containment (parent or ancestor of Wallpaper): grabToImage: item's window is not visible
+file:///usr/share/plasma/plasmoids/org.kde.desktopcontainment/contents/ui/main.qml: QML Containment (parent or ancestor of Wallpaper): grabToImage: item's window is not visible
+file:///usr/lib/x86_64-linux-gnu/qt5/qml/org/kde/kirigami.2/templates/InlineMessage.qml:265:13: QML SelectableLabel: Binding loop detected for property "implicitWidth"
+QObject::connect: No such slot DesktopProtocol::_k_slotRedirection(KIO::Job *, QUrl)
+org.kde.plasma.kicker: DragHelper is deprecated and will be removed in Plasma 6. Use Qt Quick Drag instead.
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:152:5: QML Connections: Implicitly defined onFoo properties in Connections are deprecated. Use this syntax instead: function onFoo(<arguments>) { ... }
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:136:5: QML Connections: Implicitly defined onFoo properties in Connections are deprecated. Use this syntax instead: function onFoo(<arguments>) { ... }
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:144:5: QML Connections: Implicitly defined onFoo properties in Connections are deprecated. Use this syntax instead: function onFoo(<arguments>) { ... }
+file:///home/joshd/.local/share/plasma/plasmoids/org.kde.activeApplication/contents/ui/main.qml:37: TypeError: Cannot read property 'left' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/CompactRepresentation.qml:54: TypeError: Cannot read property 'height' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/CompactRepresentation.qml:68:5: QML Connections: Implicitly defined onFoo properties in Connections are deprecated. Use this syntax instead: function onFoo(<arguments>) { ... }
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/MainColumnItem.qml:452:9: QML Button: Binding loop detected for property "icon.width"
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/MainColumnItem.qml:248:5: QML Button: Binding loop detected for property "icon.width"
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+Cyclic dependency detected between "file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml" and "file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/NotificationHeader.qml"
+Cyclic dependency detected between "file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml" and "file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/ThumbnailStrip.qml"
+file:///usr/share/plasma/plasmoids/org.kde.plasma.networkmanagement/contents/ui/main.qml:95: TypeError: Cannot read property 'airplaneModeAvailable' of null
+Could not find the Plasmoid for Plasma::FrameSvgItem(0x5c00ef2fe060) QQmlContext(0x5c00ec3899f0) QUrl("file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml")
+Could not find the Plasmoid for Plasma::FrameSvgItem(0x5c00ef2fe060) QQmlContext(0x5c00ec3899f0) QUrl("file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml")
+Checking screens: available: (QScreen(0x5f10f8a87490, name="DisplayPort-0"), QScreen(0x5f10f8a87580, name="DisplayPort-1")) redundant: QHash() fake: QSet() all: (QScreen(0x5f10f8a87490, name="DisplayPort-0"), QScreen(0x5f10f8a87580, name="DisplayPort-1"))
+Checking screens: available: (QScreen(0x5f10f8a87490, name="DisplayPort-0"), QScreen(0x5f10f8a87580, name="DisplayPort-1")) redundant: QHash() fake: QSet() all: (QScreen(0x5f10f8a87490, name="DisplayPort-0"), QScreen(0x5f10f8a87580, name="DisplayPort-1"))
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:20: TypeError: Cannot read property 'pluginName' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:75: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:78: TypeError: Cannot read property 'pluginName' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:80: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:81: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:82: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:83: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:84: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:16: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:17: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:18: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:20: TypeError: Cannot read property 'pluginName' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:75: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:78: TypeError: Cannot read property 'pluginName' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:80: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:81: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:82: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:83: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:84: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:16: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:17: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:18: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml:301: TypeError: Cannot read property 'Window' of null
+file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml:407: TypeError: Cannot read property 'Window' of null
+file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml:0: RangeError: Maximum call stack size exceeded.
+file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml:0: RangeError: Maximum call stack size exceeded.
+file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml:0: RangeError: Maximum call stack size exceeded.
+file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml:0: RangeError: Maximum call stack size exceeded.
+file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml:0: RangeError: Maximum call stack size exceeded.
+file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml:0: RangeError: Maximum call stack size exceeded.
+file:///usr/share/plasma/plasmoids/org.kde.plasma.volume/contents/ui/main.qml:775: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/plasmoids/org.kde.plasma.networkmanagement/contents/ui/main.qml:151: TypeError: Cannot read property 'expanded' of null
+file:///usr/share/plasma/packages/org.kde.paneltoolbox/contents/ui/main.qml:17: TypeError: Cannot read property 'formFactor' of null
+file:///usr/share/plasma/packages/org.kde.paneltoolbox/contents/ui/main.qml:100: TypeError: Cannot read property 'editMode' of null
+file:///usr/share/plasma/packages/org.kde.paneltoolbox/contents/ui/main.qml:45: TypeError: Cannot read property 'editMode' of null
+file:///usr/share/plasma/packages/org.kde.paneltoolbox/contents/ui/main.qml:34: TypeError: Cannot read property 'editMode' of null
+kf.plasma.quick: Applet preload policy set to 1
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:168: TypeError: Cannot read property 'configuration' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:153: TypeError: Cannot read property 'configuration' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:68: TypeError: Cannot read property 'configuration' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:115: TypeError: Cannot read property 'configuration' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:144:5: QML Connections: Implicitly defined onFoo properties in Connections are deprecated. Use this syntax instead: function onFoo(<arguments>) { ... }
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/MenuRepresentation.qml:71: TypeError: Cannot call method 'reset' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/MenuRepresentation.qml:151: TypeError: Cannot call method 'reload' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:77: TypeError: Cannot read property 'configuration' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:78: TypeError: Cannot read property 'configuration' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:79: TypeError: Cannot read property 'configuration' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:80: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+org.kde.plasma.pulseaudio: No object for name "alsa_output.pci-0000_2d_00.4.analog-stereo"
+org.kde.plasma.pulseaudio: No object for name "alsa_output.pci-0000_2d_00.4.analog-stereo"
+org.kde.plasma.pulseaudio: No object for name "alsa_output.pci-0000_2d_00.4.analog-stereo"
+org.kde.plasma.pulseaudio: No object for name "alsa_input.usb-webcamvendor_NexiGo_N60_FHD_Webcam_Jan_29_2024-10_32_28-N60-02.mono-fallback"
+file:///usr/lib/x86_64-linux-gnu/qt5/qml/org/kde/kirigami.2/templates/InlineMessage.qml:265:13: QML SelectableLabel: Binding loop detected for property "implicitWidth"
+file:///usr/share/plasma/plasmoids/org.kde.desktopcontainment/contents/ui/main.qml: QML Containment (parent or ancestor of Wallpaper): grabToImage: item's window is not visible
+file:///usr/share/plasma/plasmoids/org.kde.desktopcontainment/contents/ui/main.qml: QML Containment (parent or ancestor of Wallpaper): grabToImage: item's window is not visible
+file:///usr/lib/x86_64-linux-gnu/qt5/qml/org/kde/kirigami.2/templates/InlineMessage.qml:265:13: QML SelectableLabel: Binding loop detected for property "implicitWidth"
+QObject::connect: No such slot DesktopProtocol::_k_slotRedirection(KIO::Job *, QUrl)
+org.kde.plasma.kicker: DragHelper is deprecated and will be removed in Plasma 6. Use Qt Quick Drag instead.
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:152:5: QML Connections: Implicitly defined onFoo properties in Connections are deprecated. Use this syntax instead: function onFoo(<arguments>) { ... }
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:136:5: QML Connections: Implicitly defined onFoo properties in Connections are deprecated. Use this syntax instead: function onFoo(<arguments>) { ... }
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:144:5: QML Connections: Implicitly defined onFoo properties in Connections are deprecated. Use this syntax instead: function onFoo(<arguments>) { ... }
+file:///home/joshd/.local/share/plasma/plasmoids/org.kde.activeApplication/contents/ui/main.qml:37: TypeError: Cannot read property 'left' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/CompactRepresentation.qml:54: TypeError: Cannot read property 'height' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/CompactRepresentation.qml:68:5: QML Connections: Implicitly defined onFoo properties in Connections are deprecated. Use this syntax instead: function onFoo(<arguments>) { ... }
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/MainColumnItem.qml:452:9: QML Button: Binding loop detected for property "icon.width"
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/MainColumnItem.qml:248:5: QML Button: Binding loop detected for property "icon.width"
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+Cyclic dependency detected between "file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml" and "file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/ThumbnailStrip.qml"
+Cyclic dependency detected between "file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml" and "file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/NotificationHeader.qml"
+file:///usr/share/plasma/plasmoids/org.kde.plasma.networkmanagement/contents/ui/main.qml:95: TypeError: Cannot read property 'airplaneModeAvailable' of null
+Checking screens: available: (QScreen(0x5583762e6a90, name="DisplayPort-0"), QScreen(0x5583762e6b80, name="DisplayPort-1")) redundant: QHash() fake: QSet() all: (QScreen(0x5583762e6a90, name="DisplayPort-0"), QScreen(0x5583762e6b80, name="DisplayPort-1"))
+Checking screens: available: (QScreen(0x5583762e6a90, name="DisplayPort-0"), QScreen(0x5583762e6b80, name="DisplayPort-1")) redundant: QHash() fake: QSet() all: (QScreen(0x5583762e6a90, name="DisplayPort-0"), QScreen(0x5583762e6b80, name="DisplayPort-1"))
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:20: TypeError: Cannot read property 'pluginName' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:75: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:78: TypeError: Cannot read property 'pluginName' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:80: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:81: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:82: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:83: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:84: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:16: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:17: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:18: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:20: TypeError: Cannot read property 'pluginName' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:75: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:78: TypeError: Cannot read property 'pluginName' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:80: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:81: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:82: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:83: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:84: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:16: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:17: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/wallpapers/org.kde.image/contents/ui/main.qml:18: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml:301: TypeError: Cannot read property 'Window' of null
+file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml:407: TypeError: Cannot read property 'Window' of null
+file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml:0: RangeError: Maximum call stack size exceeded.
+file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml:0: RangeError: Maximum call stack size exceeded.
+file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml:0: RangeError: Maximum call stack size exceeded.
+file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml:0: RangeError: Maximum call stack size exceeded.
+file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml:0: RangeError: Maximum call stack size exceeded.
+file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml:0: RangeError: Maximum call stack size exceeded.
+file:///usr/share/plasma/plasmoids/org.kde.plasma.volume/contents/ui/main.qml:775: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/plasmoids/org.kde.plasma.networkmanagement/contents/ui/main.qml:151: TypeError: Cannot read property 'expanded' of null
+file:///usr/share/plasma/packages/org.kde.paneltoolbox/contents/ui/main.qml:17: TypeError: Cannot read property 'formFactor' of null
+file:///usr/share/plasma/packages/org.kde.paneltoolbox/contents/ui/main.qml:100: TypeError: Cannot read property 'editMode' of null
+file:///usr/share/plasma/packages/org.kde.paneltoolbox/contents/ui/main.qml:45: TypeError: Cannot read property 'editMode' of null
+file:///usr/share/plasma/packages/org.kde.paneltoolbox/contents/ui/main.qml:34: TypeError: Cannot read property 'editMode' of null
+kf.plasma.quick: Applet preload policy set to 1
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:168: TypeError: Cannot read property 'configuration' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:153: TypeError: Cannot read property 'configuration' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:68: TypeError: Cannot read property 'configuration' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:115: TypeError: Cannot read property 'configuration' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:144:5: QML Connections: Implicitly defined onFoo properties in Connections are deprecated. Use this syntax instead: function onFoo(<arguments>) { ... }
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/MenuRepresentation.qml:71: TypeError: Cannot call method 'reset' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/MenuRepresentation.qml:151: TypeError: Cannot call method 'reload' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:77: TypeError: Cannot read property 'configuration' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:78: TypeError: Cannot read property 'configuration' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:79: TypeError: Cannot read property 'configuration' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:80: TypeError: Cannot read property 'configuration' of null
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml: Writing to "applet" broke the binding to the underlying model
+org.kde.plasma.pulseaudio: No object for name "alsa_output.pci-0000_2d_00.4.analog-stereo"
+org.kde.plasma.pulseaudio: No object for name "alsa_output.pci-0000_2d_00.4.analog-stereo"
+org.kde.plasma.pulseaudio: No object for name "alsa_output.pci-0000_2d_00.4.analog-stereo"
+org.kde.plasma.pulseaudio: No object for name "alsa_input.usb-webcamvendor_NexiGo_N60_FHD_Webcam_Jan_29_2024-10_32_28-N60-02.mono-fallback"
+file:///usr/lib/x86_64-linux-gnu/qt5/qml/org/kde/kirigami.2/templates/InlineMessage.qml:265:13: QML SelectableLabel: Binding loop detected for property "implicitWidth"
+file:///usr/share/plasma/plasmoids/org.kde.desktopcontainment/contents/ui/main.qml: QML Containment (parent or ancestor of Wallpaper): grabToImage: item's window is not visible
+file:///usr/share/plasma/plasmoids/org.kde.desktopcontainment/contents/ui/main.qml: QML Containment (parent or ancestor of Wallpaper): grabToImage: item's window is not visible
+file:///usr/lib/x86_64-linux-gnu/qt5/qml/org/kde/kirigami.2/templates/InlineMessage.qml:265:13: QML SelectableLabel: Binding loop detected for property "implicitWidth"
+QObject::connect: No such slot DesktopProtocol::_k_slotRedirection(KIO::Job *, QUrl)
+org.kde.plasma.kicker: DragHelper is deprecated and will be removed in Plasma 6. Use Qt Quick Drag instead.
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:152:5: QML Connections: Implicitly defined onFoo properties in Connections are deprecated. Use this syntax instead: function onFoo(<arguments>) { ... }
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:136:5: QML Connections: Implicitly defined onFoo properties in Connections are deprecated. Use this syntax instead: function onFoo(<arguments>) { ... }
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/main.qml:144:5: QML Connections: Implicitly defined onFoo properties in Connections are deprecated. Use this syntax instead: function onFoo(<arguments>) { ... }
+file:///home/joshd/.local/share/plasma/plasmoids/org.kde.activeApplication/contents/ui/main.qml:37: TypeError: Cannot read property 'left' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/CompactRepresentation.qml:54: TypeError: Cannot read property 'height' of null
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/CompactRepresentation.qml:68:5: QML Connections: Implicitly defined onFoo properties in Connections are deprecated. Use this syntax instead: function onFoo(<arguments>) { ... }
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/MainColumnItem.qml:452:9: QML Button: Binding loop detected for property "icon.width"
+file:///home/joshd/.local/share/plasma/plasmoids/menu11/contents/ui/MainColumnItem.qml:248:5: QML Button: Binding loop detected for property "icon.width"
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+qml: PlasmaExtras.ScrollArea is deprecated. Use PlasmaComponents3.ScrollView instead.
+Cyclic dependency detected between "file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml" and "file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/ThumbnailStrip.qml"
+Cyclic dependency detected between "file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml" and "file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/NotificationHeader.qml"
+file:///usr/share/plasma/plasmoids/org.kde.plasma.networkmanagement/contents/ui/main.qml:95: TypeError: Cannot read property 'airplaneModeAvailable' of null
+Could not find the Plasmoid for Plasma::FrameSvgItem(0x55837a7b96d0) QQmlContext(0x5583794a8fa0) QUrl("file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml")
+Could not find the Plasmoid for Plasma::FrameSvgItem(0x55837a7b96d0) QQmlContext(0x5583794a8fa0) QUrl("file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml")
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/ConfigOverlay.qml:310:17: QML SpinBox: Binding loop detected for property "implicitWidth"
+QQmlComponent: Component is not ready
+QQmlEngine::setContextForObject(): Object already has a QQmlContext
+QQmlEngine::setContextForObject(): Object already has a QQmlContext
+file:///usr/share/plasma/shells/org.kde.plasma.desktop/contents/configuration/panelconfiguration/ToolBar.qml:284:9: QML SpinBox: Binding loop detected for property "implicitWidth"
+Could not find the Plasmoid for Plasma::FrameSvgItem(0x55837b7c0100) QQmlContext(0x5583794a8fa0) QUrl("file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml")
+Could not find the Plasmoid for Plasma::FrameSvgItem(0x55837b7c0100) QQmlContext(0x5583794a8fa0) QUrl("file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml")
+file:///usr/share/plasma/plasmoids/org.kde.panel/contents/ui/main.qml:142: TypeError: Cannot read property 'index' of null
+Could not find the Plasmoid for Plasma::FrameSvgItem(0x55837a003aa0) QQmlContext(0x5583794a8fa0) QUrl("file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml")
+Could not find the Plasmoid for Plasma::FrameSvgItem(0x55837a003aa0) QQmlContext(0x5583794a8fa0) QUrl("file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml")
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:73:5: QML Popup: cannot find any window to open popup in.
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:73:5: QML Popup: cannot find any window to open popup in.
+Failed to unregister window menu, reason: org.freedesktop.DBus.Error.ServiceUnknown ("The name com.canonical.AppMenu.Registrar was not provided by any .service files")
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:73:5: QML Popup: cannot find any window to open popup in.
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:73:5: QML Popup: cannot find any window to open popup in.
+Could not find the Plasmoid for Plasma::FrameSvgItem(0x55837b5c8b00) QQmlContext(0x5583794a8fa0) QUrl("file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml")
+Could not find the Plasmoid for Plasma::FrameSvgItem(0x55837b5c8b00) QQmlContext(0x5583794a8fa0) QUrl("file:///usr/share/plasma/plasmoids/org.kde.plasma.notifications/contents/ui/global/Globals.qml")
+trying to show an empty dialog
+QQmlVMEMetaObject: Internal error - attempted to evaluate a function in an invalid context
+file:///usr/share/plasma/plasmoids/org.kde.plasma.taskmanager/contents/ui/main.qml:401: TypeError: Type error
+file:///usr/lib/x86_64-linux-gnu/qt5/qml/org/kde/kirigami.2/ScrollablePage.qml:200:9: QML MouseArea: Binding loop detected for property "width"
+file:///usr/lib/x86_64-linux-gnu/qt5/qml/org/kde/kirigami.2/ScrollablePage.qml:200:9: QML MouseArea: Binding loop detected for property "width"
+QQmlEngine::setContextForObject(): Object already has a QQmlContext
+fetch ratings! false
+adding empty sources model QStandardItemModel(0x6315fd75f170)
+QObject::startTimer: Timers cannot have negative intervals
+no component found for "com.ubuntu.ubuntu"
+file:///usr/lib/x86_64-linux-gnu/qt5/qml/org/kde/kirigami.2/ScrollablePage.qml:200:9: QML MouseArea: Binding loop detected for property "implicitHeight"
+file:///usr/lib/x86_64-linux-gnu/qt5/qml/org/kde/kirigami.2/ScrollablePage.qml:200:9: QML MouseArea: Binding loop detected for property "implicitHeight"
+file:///usr/lib/x86_64-linux-gnu/qt5/qml/org/kde/kirigami.2/ScrollablePage.qml:200:9: QML MouseArea: Binding loop detected for property "implicitHeight"
+file:///usr/lib/x86_64-linux-gnu/qt5/qml/org/kde/kirigami.2/ScrollablePage.qml:200:9: QML MouseArea: Binding loop detected for property "implicitHeight"
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:73:5: QML Popup: cannot find any window to open popup in.
+file:///home/joshd/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/contents/ui/main.qml:73:5: QML Popup: cannot find any window to open popup in.
+took really long to fetch PackageKitBackend(0x6315fd6cfb40)
+fetch ratings! false
+adding empty sources model QStandardItemModel(0x5f7927788060)
+QObject::startTimer: Timers cannot have negative intervals
+no component found for "com.ubuntu.ubuntu"
+file:///usr/lib/x86_64-linux-gnu/qt5/qml/org/kde/kirigami.2/ScrollablePage.qml:200:9: QML MouseArea: Binding loop detected for property "implicitHeight"
+file:///usr/lib/x86_64-linux-gnu/qt5/qml/org/kde/kirigami.2/ScrollablePage.qml:200:9: QML MouseArea: Binding loop detected for property "implicitHeight"
+file:///usr/lib/x86_64-linux-gnu/qt5/qml/org/kde/kirigami.2/ScrollablePage.qml:200:9: QML MouseArea: Binding loop detected for property "implicitHeight"
+file:///usr/lib/x86_64-linux-gnu/qt5/qml/org/kde/kirigami.2/ScrollablePage.qml:200:9: QML MouseArea: Binding loop detected for property "implicitHeight"
+file:///usr/lib/x86_64-linux-gnu/qt5/qml/org/kde/kirigami.2/ScrollablePage.qml:200:9: QML MouseArea: Binding loop detected for property "implicitHeight"
+file:///usr/lib/x86_64-linux-gnu/qt5/qml/org/kde/kirigami.2/ScrollablePage.qml:200:9: QML MouseArea: Binding loop detected for property "implicitHeight"
+file:///usr/lib/x86_64-linux-gnu/qt5/qml/org/kde/kirigami.2/ScrollablePage.qml:200:9: QML MouseArea: Binding loop detected for property "implicitHeight"
+file:///usr/lib/x86_64-linux-gnu/qt5/qml/org/kde/kirigami.2/ScrollablePage.qml:200:9: QML MouseArea: Binding loop detected for property "implicitHeight"
+file:///usr/lib/x86_64-linux-gnu/qt5/qml/org/kde/kirigami.2/ScrollablePage.qml:200:9: QML MouseArea: Binding loop detected for property "implicitHeight"
+file:///usr/lib/x86_64-linux-gnu/qt5/qml/org/kde/kirigami.2/ScrollablePage.qml:200:9: QML MouseArea: Binding loop detected for property "implicitHeight"
+file:///usr/lib/x86_64-linux-gnu/qt5/qml/org/kde/kirigami.2/ScrollablePage.qml:200:9: QML MouseArea: Binding loop detected for property "implicitHeight"
+file:///usr/lib/x86_64-linux-gnu/qt5/qml/org/kde/kirigami.2/ScrollablePage.qml:200:9: QML MouseArea: Binding loop detected for property "width"
+file:///usr/lib/x86_64-linux-gnu/qt5/qml/org/kde/kirigami.2/ScrollablePage.qml:200:9: QML MouseArea: Binding loop detected for property "width"
+QQmlEngine::setContextForObject(): Object already has a QQmlContext

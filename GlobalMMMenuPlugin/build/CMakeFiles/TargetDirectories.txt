@@ -1,0 +1,9 @@
+/home/joshd/Source/KDE/GlobalMMMenuPlugin/build/CMakeFiles/globalmenuhelper.dir
+/home/joshd/Source/KDE/GlobalMMMenuPlugin/build/CMakeFiles/edit_cache.dir
+/home/joshd/Source/KDE/GlobalMMMenuPlugin/build/CMakeFiles/rebuild_cache.dir
+/home/joshd/Source/KDE/GlobalMMMenuPlugin/build/CMakeFiles/list_install_components.dir
+/home/joshd/Source/KDE/GlobalMMMenuPlugin/build/CMakeFiles/install.dir
+/home/joshd/Source/KDE/GlobalMMMenuPlugin/build/CMakeFiles/install/local.dir
+/home/joshd/Source/KDE/GlobalMMMenuPlugin/build/CMakeFiles/install/strip.dir
+/home/joshd/Source/KDE/GlobalMMMenuPlugin/build/CMakeFiles/globalmenuhelper_autogen_timestamp_deps.dir
+/home/joshd/Source/KDE/GlobalMMMenuPlugin/build/CMakeFiles/globalmenuhelper_autogen.dir
