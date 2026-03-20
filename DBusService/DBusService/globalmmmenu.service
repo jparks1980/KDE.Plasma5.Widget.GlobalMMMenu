@@ -1,7 +1,6 @@
 [Unit]
 Description=GlobalMMMenu DBus Service
 Documentation=https://github.com/YOUR_USERNAME/GlobalMMMenu
-# Start after the D-Bus session bus and the graphical session are ready.
 After=graphical-session.target dbus.socket
 PartOf=graphical-session.target
 
@@ -11,11 +10,15 @@ ExecStart=/usr/local/bin/globalmmmenu
 Restart=on-failure
 RestartSec=3
 
-# Give the service a moment for the display server to be fully initialised
-# before it tries to open the X11 display and the D-Bus session bus.
-ExecStartPre=/bin/sleep 2
+# Ensure appsettings.json is found next to the binary.
+WorkingDirectory=/usr/local/bin
+
+# Force console logging so output appears in journalctl.
+Environment=DOTNET_ENVIRONMENT=Production
+Environment=Logging__LogLevel__Default=Information
+Environment=Logging__LogLevel__Microsoft.Hosting.Lifetime=Information
+StandardOutput=journal
+StandardError=journal
 
 [Install]
-# graphical-session.target is the correct target for user-session XDG services.
-# This ensures the service starts when the KDE/X11 session begins.
 WantedBy=graphical-session.target

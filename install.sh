@@ -133,10 +133,6 @@ install_service() {
     info "Publishing self-contained executable..."
     dotnet publish "$SERVICE_DIR/DBusService.csproj" \
         --configuration Release \
-        --runtime linux-x64 \
-        --self-contained true \
-        -p:PublishSingleFile=true \
-        -p:PublishTrimmed=false \
         --output /tmp/globalmmmenu-publish
 
     info "Installing to $SERVICE_BIN (requires sudo)..."

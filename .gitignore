@@ -1,0 +1,20 @@
+# .NET build outputs
+**/bin/
+**/obj/
+
+# CMake build directory
+GlobalMMMenuPlugin/build/
+
+# Publish output
+/tmp/globalmmmenu-publish/
+
+# dotnet user secrets / local overrides
+appsettings.Development.json
+**/Properties/launchSettings.json
+
+# VS Code
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db

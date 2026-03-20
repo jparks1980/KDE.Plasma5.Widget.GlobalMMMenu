@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "dgSpecHash": "jAtiHk0z3y0=",
+  "dgSpecHash": "aMlYKIsKn5o=",
   "success": true,
   "projectFilePath": "/home/joshd/Source/KDE/DBusService/DBusService/DBusService.csproj",
   "expectedPackageFiles": [
@@ -31,8 +31,12 @@
     "/home/joshd/.nuget/packages/microsoft.extensions.options/10.0.4/microsoft.extensions.options.10.0.4.nupkg.sha512",
     "/home/joshd/.nuget/packages/microsoft.extensions.options.configurationextensions/10.0.4/microsoft.extensions.options.configurationextensions.10.0.4.nupkg.sha512",
     "/home/joshd/.nuget/packages/microsoft.extensions.primitives/10.0.4/microsoft.extensions.primitives.10.0.4.nupkg.sha512",
+    "/home/joshd/.nuget/packages/microsoft.net.illink.tasks/10.0.4/microsoft.net.illink.tasks.10.0.4.nupkg.sha512",
     "/home/joshd/.nuget/packages/system.diagnostics.eventlog/10.0.4/system.diagnostics.eventlog.10.0.4.nupkg.sha512",
-    "/home/joshd/.nuget/packages/tmds.dbus/0.91.0/tmds.dbus.0.91.0.nupkg.sha512"
+    "/home/joshd/.nuget/packages/tmds.dbus/0.91.0/tmds.dbus.0.91.0.nupkg.sha512",
+    "/home/joshd/.nuget/packages/microsoft.netcore.app.runtime.linux-x64/10.0.4/microsoft.netcore.app.runtime.linux-x64.10.0.4.nupkg.sha512",
+    "/home/joshd/.nuget/packages/microsoft.aspnetcore.app.runtime.linux-x64/10.0.4/microsoft.aspnetcore.app.runtime.linux-x64.10.0.4.nupkg.sha512",
+    "/home/joshd/.nuget/packages/microsoft.netcore.app.host.linux-x64/10.0.4/microsoft.netcore.app.host.linux-x64.10.0.4.nupkg.sha512"
   ],
   "logs": []
 }
