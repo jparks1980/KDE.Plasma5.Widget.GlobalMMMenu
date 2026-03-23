@@ -278,9 +278,8 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
         }
 
         // ── Keyboard shortcut (optional, gated by RichMetadata config) ──────────────
-        // Fetches the QAction key binding string from org.a11y.atspi.Action.
-        // Note: icon names are NOT available via org.a11y.atspi.Image for Qt menu items
-        // (Qt's AT-SPI bridge uses ImageDescription for image widgets, not action icons).
+        // Only shortcut is available via AT-SPI for Qt menu items — Qt's AT-SPI bridge
+        // does not expose QAction icon names through any AT-SPI interface.
         if (RichMetadata)
         {
             try
@@ -381,7 +380,16 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
                 combo.Add(p);
             }
         }
-        return combo.Count > 0 ? new[] { combo.ToArray() } : null;
+        if (combo.Count == 0) return null;
+
+        // Filter out Alt-only shortcuts — those are menu mnemonics (e.g. Alt+F for the
+        // File menu), not user-facing keyboard shortcuts. Only keep bindings that include
+        // at least one of: Ctrl, Shift, Meta/Super.
+        var modifiers = combo.Take(combo.Count - 1).ToList();
+        if (modifiers.Count > 0 && modifiers.All(m => m == "Alt"))
+            return null;
+
+        return new[] { combo.ToArray() };
     }
 
     private async Task<string> GetNodeNameAsync(string busName, ObjectPath path)
@@ -440,8 +448,8 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
                 var (id, (busName, path)) = kvp;
                 try
                 {
-                    // Note: icon names are not reliably available via org.a11y.atspi.Image for
-                    // Qt menu items (ImageDescription is for image widgets, not action icons).
+                    // Qt's AT-SPI bridge does not expose QAction icon names through any
+                    // AT-SPI interface — icons are simply unavailable on the AT-SPI path.
                     // Fetch shortcuts only via org.a11y.atspi.Action.
                     var actionProxy = _atspiConnection!.CreateProxy<IAtSpiAction>(busName, new ObjectPath(path));
                     var keyBinding  = await actionProxy.GetKeyBindingAsync(0);
@@ -505,8 +513,182 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
             if (e.Shortcut != null) dict["shortcut"]  = e.Shortcut;
         }
 
+        // Heuristic icon fallback: Qt's AT-SPI bridge never exposes icon names, so guess
+        // from the label using the FreeDesktop icon naming spec. Only applied when no real
+        // icon was already provided (e.g. dbusmenu path).
+        if (!dict.ContainsKey("icon-name")
+            && dict.TryGetValue("label", out var labelObj) && labelObj is string lbl)
+        {
+            var guessed = GuessIconFromLabel(lbl);
+            if (guessed != null) dict["icon-name"] = guessed;
+        }
+
         return dict;
     }
+
+    /// <summary>
+    /// Normalises a menu item label and looks it up in the standard FreeDesktop icon table.
+    /// Strips mnemonic ampersands (e.g. "&amp;File"), trailing ellipsis, and surrounding
+    /// whitespace before matching. Returns null when no match is found.
+    /// </summary>
+    private static string? GuessIconFromLabel(string? label)
+    {
+        if (string.IsNullOrWhiteSpace(label)) return null;
+        var key = label
+            .Replace("&", "")       // strip mnemonic markers
+            .Replace("\u2026", "")  // strip unicode ellipsis …
+            .TrimEnd('.')           // strip trailing ASCII dots
+            .Trim()
+            .ToLowerInvariant();
+        return s_labelIconMap.TryGetValue(key, out var icon) ? icon : null;
+    }
+
+    // Maps normalised lower-case menu labels to FreeDesktop standard icon names.
+    // Only covers universally-recognised actions; app-specific items are left without icons.
+    private static readonly Dictionary<string, string> s_labelIconMap = new(StringComparer.Ordinal)
+    {
+        // ── File ──────────────────────────────────────────────────────────────
+        { "new",                    "document-new" },
+        { "new file",               "document-new" },
+        { "new document",           "document-new" },
+        { "new window",             "window-new" },
+        { "new tab",                "tab-new" },
+        { "open",                   "document-open" },
+        { "open file",              "document-open" },
+        { "open folder",            "folder-open" },
+        { "open location",          "document-open" },
+        { "open recent",            "document-open-recent" },
+        { "save",                   "document-save" },
+        { "save as",                "document-save-as" },
+        { "save all",               "document-save-all" },
+        { "save a copy",            "document-save-as" },
+        { "save copy as",           "document-save-as" },
+        { "export",                 "document-export" },
+        { "import",                 "document-import" },
+        { "revert",                 "document-revert" },
+        { "revert to saved",        "document-revert" },
+        { "print",                  "document-print" },
+        { "print preview",          "document-print-preview" },
+        { "page setup",             "document-page-setup" },
+        { "close",                  "document-close" },
+        { "close window",           "window-close" },
+        { "close tab",              "tab-close" },
+        { "close all",              "document-close" },
+        { "quit",                   "application-exit" },
+        { "exit",                   "application-exit" },
+        // ── Edit ──────────────────────────────────────────────────────────────
+        { "undo",                   "edit-undo" },
+        { "redo",                   "edit-redo" },
+        { "cut",                    "edit-cut" },
+        { "copy",                   "edit-copy" },
+        { "copy as",                "edit-copy" },
+        { "paste",                  "edit-paste" },
+        { "paste special",          "edit-paste-special" },
+        { "paste in place",         "edit-paste" },
+        { "delete",                 "edit-delete" },
+        { "remove",                 "list-remove" },
+        { "clear",                  "edit-clear" },
+        { "select all",             "edit-select-all" },
+        { "select none",            "edit-select-none" },
+        { "deselect all",           "edit-select-none" },
+        { "invert selection",       "edit-select-invert" },
+        { "find",                   "edit-find" },
+        { "find next",              "go-down-search" },
+        { "find previous",          "go-up-search" },
+        { "find and replace",       "edit-find-replace" },
+        { "replace",                "edit-find-replace" },
+        { "preferences",            "preferences-system" },
+        { "settings",               "configure" },
+        { "configure",              "configure" },
+        { "options",                "configure" },
+        { "properties",             "document-properties" },
+        { "rename",                 "edit-rename" },
+        { "move to trash",          "user-trash" },
+        { "move to recycle bin",    "user-trash" },
+        // ── View ──────────────────────────────────────────────────────────────
+        { "zoom in",                "zoom-in" },
+        { "zoom out",               "zoom-out" },
+        { "actual size",            "zoom-original" },
+        { "original size",          "zoom-original" },
+        { "zoom to fit",            "zoom-fit-best" },
+        { "fit page",               "zoom-fit-best" },
+        { "fit best",               "zoom-fit-best" },
+        { "fit width",              "zoom-fit-width" },
+        { "full screen",            "view-fullscreen" },
+        { "fullscreen",             "view-fullscreen" },
+        { "leave full screen",      "view-restore" },
+        { "refresh",                "view-refresh" },
+        { "reload",                 "view-refresh" },
+        { "show toolbar",           "view-show-toolbar" },
+        { "show statusbar",         "view-show-statusbar" },
+        { "show status bar",        "view-show-statusbar" },
+        { "show hidden files",      "view-hidden" },
+        { "hidden files",           "view-hidden" },
+        { "sort ascending",         "view-sort-ascending" },
+        { "sort descending",        "view-sort-descending" },
+        // ── Go / Navigate ─────────────────────────────────────────────────────
+        { "back",                   "go-previous" },
+        { "go back",                "go-previous" },
+        { "forward",                "go-next" },
+        { "go forward",             "go-next" },
+        { "home",                   "go-home" },
+        { "go home",                "go-home" },
+        { "up",                     "go-up" },
+        { "go up",                  "go-up" },
+        { "next",                   "go-next" },
+        { "previous",               "go-previous" },
+        { "first",                  "go-first" },
+        { "last",                   "go-last" },
+        // ── Bookmarks ─────────────────────────────────────────────────────────
+        { "add bookmark",           "bookmark-new" },
+        { "bookmark this page",     "bookmark-new" },
+        { "bookmark this folder",   "bookmark-new" },
+        { "edit bookmarks",         "bookmarks-organize" },
+        { "manage bookmarks",       "bookmarks-organize" },
+        { "show bookmarks",         "bookmarks-organize" },
+        // ── Tools ─────────────────────────────────────────────────────────────
+        { "terminal",               "utilities-terminal" },
+        { "open terminal",          "utilities-terminal" },
+        { "open terminal here",     "utilities-terminal" },
+        { "calculator",             "accessories-calculator" },
+        { "run command",            "system-run" },
+        { "scripts",                "system-run" },
+        { "macro",                  "system-run" },
+        { "macros",                 "system-run" },
+        { "plugins",                "preferences-plugin" },
+        { "extensions",             "preferences-plugin" },
+        { "add-ons",                "preferences-plugin" },
+        // ── Help ──────────────────────────────────────────────────────────────
+        { "help",                   "help-contents" },
+        { "help contents",          "help-contents" },
+        { "open handbook",          "help-contents" },
+        { "handbook",               "help-contents" },
+        { "user guide",             "help-contents" },
+        { "user manual",            "help-contents" },
+        { "documentation",          "help-contents" },
+        { "online help",            "help-contextual" },
+        { "contextual help",        "help-contextual" },
+        { "keyboard shortcuts",     "help-keybord-shortcuts" },
+        { "what's this",            "help-whatsthis" },
+        { "what's this?",           "help-whatsthis" },
+        { "whats this",             "help-whatsthis" },
+        { "report bug",             "tools-report-bug" },
+        { "report a bug",           "tools-report-bug" },
+        { "report a problem",       "tools-report-bug" },
+        { "check for updates",      "system-software-update" },
+        { "update",                 "system-software-update" },
+        { "about",                  "help-about" },
+        { "about qt",               "help-about" },
+        { "about kde",              "help-about" },
+        { "donate",                 "help-donate" },
+        // ── Window ────────────────────────────────────────────────────────────
+        { "minimize",               "window-minimize" },
+        { "maximise",               "window-maximize" },
+        { "maximize",               "window-maximize" },
+        { "restore",                "window-restore" },
+        { "split view",             "view-split-left-right" },
+        { "split",                  "view-split-left-right" },
+    };
 
     public ValueTask DisposeAsync()
     {
