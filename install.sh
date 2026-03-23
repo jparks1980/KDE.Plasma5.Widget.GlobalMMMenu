@@ -138,7 +138,14 @@ install_service() {
     info "Installing to $SERVICE_BIN (requires sudo)..."
     sudo install -m 755 /tmp/globalmmmenu-publish/DBusService "$SERVICE_BIN"
 
-    success "Service binary installed at $SERVICE_BIN."
+    # Copy appsettings.json alongside the binary — the service WorkingDirectory is
+    # /usr/local/bin, so the binary looks for config files there at runtime.
+    sudo install -m 644 /tmp/globalmmmenu-publish/appsettings.json "$(dirname "$SERVICE_BIN")/appsettings.json"
+    if [[ -f /tmp/globalmmmenu-publish/appsettings.Development.json ]]; then
+        sudo install -m 644 /tmp/globalmmmenu-publish/appsettings.Development.json "$(dirname "$SERVICE_BIN")/appsettings.Development.json"
+    fi
+
+    success "Service binary and config installed at $(dirname "$SERVICE_BIN")."
 }
 
 # ── Step 4: systemd user service ──────────────────────────────────────────────
