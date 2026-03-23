@@ -10,6 +10,9 @@ internal static class NativeMethods
 {
     private const string LibX11 = "libX11.so.6";
 
+    // Must be called before any other X11 calls when using X11 from multiple threads.
+    [DllImport(LibX11)] internal static extern int XInitThreads();
+
     [DllImport(LibX11)] internal static extern IntPtr XOpenDisplay(string? display);
     [DllImport(LibX11)] internal static extern int XCloseDisplay(IntPtr display);
     [DllImport(LibX11)] internal static extern IntPtr XDefaultRootWindow(IntPtr display);
@@ -27,6 +30,11 @@ internal static class NativeMethods
         out IntPtr propReturn);
     [DllImport(LibX11)] internal static extern int XFree(IntPtr data);
     [DllImport(LibX11)] internal static extern int XFlush(IntPtr display);
+    [DllImport(LibX11)] internal static extern int XChangeProperty(
+        IntPtr display, IntPtr window, IntPtr property, IntPtr type,
+        int format, int mode, byte[] data, int nElements);
+    [DllImport(LibX11)] internal static extern int XDeleteProperty(
+        IntPtr display, IntPtr window, IntPtr property);
 
     // Installs a global X error handler. The delegate must be kept alive (stored
     // in a static field) for the lifetime of the display connection.

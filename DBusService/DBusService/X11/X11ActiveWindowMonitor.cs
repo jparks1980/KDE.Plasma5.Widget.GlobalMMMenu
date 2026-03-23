@@ -18,6 +18,8 @@ public sealed class X11ActiveWindowMonitor : IDisposable
     private IntPtr _netWmWindowTypeDockAtom;
     private IntPtr _netWmWindowTypeDesktopAtom;
     private IntPtr _netWmPidAtom;
+    private IntPtr _netWmNameAtom;
+    private IntPtr _wmNameAtom;   // fallback: older ASCII window title
     // KDE appmenu atoms — set directly on each window by Qt/KDE apps.
     // Reading these avoids any dependency on the registrar or kded5 state.
     private IntPtr _kdeNetWmAppmenuServiceNameAtom;
@@ -40,6 +42,10 @@ public sealed class X11ActiveWindowMonitor : IDisposable
     /// </summary>
     public bool Connect()
     {
+        // Enable X11 thread safety so GetWindowPid() can be called from non-event-loop threads
+        // (e.g., the DBus dispatch thread when AppMenuRegistrarImpl resolves service names).
+        XInitThreads();
+
         _display = XOpenDisplay(null);
         if (_display == IntPtr.Zero)
             return false;
@@ -52,6 +58,8 @@ public sealed class X11ActiveWindowMonitor : IDisposable
         _netWmWindowTypeDockAtom    = XInternAtom(_display, "_NET_WM_WINDOW_TYPE_DOCK", false);
         _netWmWindowTypeDesktopAtom = XInternAtom(_display, "_NET_WM_WINDOW_TYPE_DESKTOP", false);
         _netWmPidAtom                      = XInternAtom(_display, "_NET_WM_PID", false);
+        _netWmNameAtom                     = XInternAtom(_display, "_NET_WM_NAME", false);
+        _wmNameAtom                        = XInternAtom(_display, "WM_NAME", false);
         _kdeNetWmAppmenuServiceNameAtom    = XInternAtom(_display, "_KDE_NET_WM_APPMENU_SERVICE_NAME", false);
         _kdeNetWmAppmenuObjectPathAtom     = XInternAtom(_display, "_KDE_NET_WM_APPMENU_OBJECT_PATH", false);
 
@@ -125,6 +133,58 @@ public sealed class X11ActiveWindowMonitor : IDisposable
         return isApp;
     }
 
+    /// <summary>Returns the window title (_NET_WM_NAME, falling back to WM_NAME), or null if neither is set.</summary>
+    internal string? GetWindowName(IntPtr window)
+        => ReadStringProperty(window, _netWmNameAtom)
+        ?? ReadStringProperty(window, _wmNameAtom);
+
+    /// <summary>Returns the _NET_WM_PID of a window, or 0 if not set.</summary>
+    internal uint GetWindowPid(IntPtr window)
+    {
+        if (XGetWindowProperty(_display, window, _netWmPidAtom,
+                0, 1, false, AnyPropertyType,
+                out _, out int format, out long nItems, out _, out IntPtr propReturn) != 0
+            || propReturn == IntPtr.Zero || nItems == 0)
+            return 0;
+
+        uint pid = format == 32
+            ? (uint)Marshal.ReadInt64(propReturn)
+            : (uint)Marshal.ReadInt32(propReturn);
+        XFree(propReturn);
+        return pid;
+    }
+
+    /// <summary>
+    /// Writes _KDE_NET_WM_APPMENU_SERVICE_NAME and _KDE_NET_WM_APPMENU_OBJECT_PATH onto a window.
+    /// Called after successful PID-based discovery to restore props cleared by registrar restarts.
+    /// Safe to call from any thread because XInitThreads() was called in Connect().
+    /// </summary>
+    internal void SetWindowMenuInfo(IntPtr window, string service, string path)
+    {
+        if (_display == IntPtr.Zero) return;
+        var PropModeReplace = 0;
+        var XA_STRING = (IntPtr)31;   // predefined Xlib atom
+
+        var svcBytes = System.Text.Encoding.UTF8.GetBytes(service + '\0');
+        var pathBytes = System.Text.Encoding.UTF8.GetBytes(path + '\0');
+
+        XChangeProperty(_display, window, _kdeNetWmAppmenuServiceNameAtom, XA_STRING, 8, PropModeReplace, svcBytes, svcBytes.Length - 1);
+        XChangeProperty(_display, window, _kdeNetWmAppmenuObjectPathAtom,  XA_STRING, 8, PropModeReplace, pathBytes, pathBytes.Length - 1);
+        XFlush(_display);
+    }
+
+    /// <summary>
+    /// Removes _KDE_NET_WM_APPMENU_SERVICE_NAME and _KDE_NET_WM_APPMENU_OBJECT_PATH from a window.
+    /// Called when a stale path is detected so the next focus event triggers fresh discovery.
+    /// </summary>
+    internal void ClearWindowMenuInfo(IntPtr window)
+    {
+        if (_display == IntPtr.Zero) return;
+        XDeleteProperty(_display, window, _kdeNetWmAppmenuServiceNameAtom);
+        XDeleteProperty(_display, window, _kdeNetWmAppmenuObjectPathAtom);
+        XFlush(_display);
+    }
+
     /// <summary>
     /// Reads _KDE_NET_WM_APPMENU_SERVICE_NAME and _KDE_NET_WM_APPMENU_OBJECT_PATH
     /// from a window's X11 properties. Returns nulls if not set.
@@ -169,6 +229,31 @@ public sealed class X11ActiveWindowMonitor : IDisposable
 
         XFree(propReturn);
         return windowId;
+    }
+
+    /// <summary>
+    /// Returns all managed X11 windows reported by the window manager via _NET_CLIENT_LIST.
+    /// Used by the background prefetch worker to discover menus for windows not yet focused.
+    /// </summary>
+    internal uint[] GetAllClientWindows()
+    {
+        if (_display == IntPtr.Zero) return [];
+        var atom = XInternAtom(_display, "_NET_CLIENT_LIST", false);
+        if (XGetWindowProperty(_display, _root, atom,
+                0, 8192, false, AnyPropertyType,
+                out _, out int format, out long nItems, out _, out IntPtr propReturn) != 0
+            || propReturn == IntPtr.Zero || nItems == 0)
+            return [];
+        try
+        {
+            var windows = new uint[nItems];
+            for (long i = 0; i < nItems; i++)
+                windows[i] = format == 32
+                    ? (uint)Marshal.ReadInt64(propReturn, (int)(i * 8))
+                    : (uint)Marshal.ReadInt32(propReturn, (int)(i * 4));
+            return windows;
+        }
+        finally { XFree(propReturn); }
     }
 
     /// <summary>
