@@ -23,17 +23,24 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
             _         => MenuLogMode.Limited,  // default: Limited
         };
 
+    // Tracks which discovery method successfully served a menu for each X11 window.
+    // Used to skip the full registrar/X11/PID/poll cycle on subsequent focus events.
+    private enum MenuSourceType { DbusMenu, AtSpi }
+    private sealed record WindowMenuSource(
+        MenuSourceType Type,
+        string? Service     = null,   // DBus service name (DbusMenu)
+        string? Path        = null,   // DBus object path  (DbusMenu)
+        string? AtSpiBusName = null); // AT-SPI bus unique name (AtSpi)
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         // ── Build-identity banner — proves which binary is running ─────────────
         // Update this string whenever you want to confirm a fresh binary is loaded.
-        logger.LogInformation("=== DBusService build: 2026-03-23-v5 (AT-SPI RoleMenuItem expansion fix) ===");
+        logger.LogInformation("=== DBusService build: 2026-03-23-v6 (window source cache + no icon spam) ===");
 
         using var connection = new Connection(Address.Session!);
         await connection.ConnectAsync();
         logger.LogInformation("Connected to D-Bus session bus");
-
-        Console.WriteLine(configuration["GlobalMMMenu:MenuLogMode"]);
 
         await connection.RegisterServiceAsync("com.kde.GlobalMMMenu");
         await connection.RegisterObjectAsync(exporter);
@@ -112,6 +119,10 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
         // Cache of last known-good menu JSON keyed by window ID.
         // ConcurrentDictionary so the background prefetch worker can write to it safely.
         var menuCache    = new ConcurrentDictionary<uint, string>();
+        // Cache of the fastest-known discovery route per window ID.
+        // Once we confirm a window uses DBus or AT-SPI, we skip the full discovery loop
+        // on subsequent focus events and go straight to the confirmed provider.
+        var windowSources = new ConcurrentDictionary<uint, WindowMenuSource>();
         var prefetchEnabled = configuration.GetValue<bool>("GlobalMMMenu:EnablePrefetch", false);
         var prefetchTask = prefetchEnabled
             ? Task.Run(() => PrefetchMenusAsync(connection, dbus, x11, registrarImpl, menuCache, stoppingToken), stoppingToken)
@@ -148,6 +159,63 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                 // 3. PID-based discovery — last resort, probes /com/canonical/menu/<windowId>
                 var service = x11Service;
                 var path    = x11Path;
+
+                // ── Fast path: window with a previously confirmed menu source ─────────────
+                // If we already know how this window exposes its menu, skip the full
+                // registrar / X11-prop / PID-scan / 2-second-poll cycle entirely.
+                if (windowSources.TryGetValue(windowId, out var knownSrc))
+                {
+                    if (knownSrc.Type == MenuSourceType.AtSpi && atspiAvailable
+                        && !string.IsNullOrEmpty(knownSrc.AtSpiBusName))
+                    {
+                        // AT-SPI fast path — skip the PID→bus-name scan, walk tree directly.
+                        using var fastCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                        fastCts.CancelAfter(TimeSpan.FromSeconds(15));
+                        try
+                        {
+                            var (fJson, fMap) = await atspi.GetMenuJsonFromConnectionAsync(knownSrc.AtSpiBusName!, fastCts.Token);
+                            if (!string.IsNullOrEmpty(fJson) && fJson != "{}")
+                            {
+                                logger.LogInformation("  0x{W:X8}: fast-path AT-SPI (bus={B})", windowId, knownSrc.AtSpiBusName);
+                                exporter.UpdateAtSpi(fJson, atspi, fMap);
+                                menuCache[windowId] = fJson;
+                                var fEnrichJson = fJson; var fEnrichMap = fMap; var fWinId = windowId;
+                                _ = Task.Run(async () =>
+                                {
+                                    try
+                                    {
+                                        using var eCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                                        eCts.CancelAfter(TimeSpan.FromSeconds(30));
+                                        var enriched = await atspi.EnrichMenuJsonAsync(fEnrichJson, fEnrichMap, eCts.Token);
+                                        if (enriched != null)
+                                        {
+                                            exporter.UpdateAtSpi(enriched, atspi, fEnrichMap);
+                                            menuCache[fWinId] = enriched;
+                                            logger.LogDebug("  0x{W:X8}: fast-path AT-SPI shortcuts enriched", fWinId);
+                                        }
+                                    }
+                                    catch (Exception ex) { logger.LogDebug("  0x{W:X8}: fast-path enrichment failed: {M}", fWinId, ex.Message); }
+                                }, stoppingToken);
+                                continue;
+                            }
+                        }
+                        catch
+                        {
+                            // AT-SPI bus name is stale (app restarted) — discard and re-discover.
+                            windowSources.TryRemove(windowId, out _);
+                        }
+                    }
+                    else if (knownSrc.Type == MenuSourceType.DbusMenu
+                             && !string.IsNullOrEmpty(knownSrc.Service)
+                             && !string.IsNullOrEmpty(knownSrc.Path))
+                    {
+                        // Pre-seed service/path so PID-scan, 2-second poll, and AT-SPI fallback
+                        // blocks are all skipped (they only run when service/path are empty).
+                        service = knownSrc.Service!;
+                        path    = knownSrc.Path!;
+                        logger.LogInformation("  0x{W:X8}: fast-path DBus (cached {S})", windowId, service);
+                    }
+                }
 
                 // Always check the live registrar first. A fully-resolved entry is always preferred
                 // over X11 props, which may carry a stale unique bus name (":1.XXXX") from a previous
@@ -257,7 +325,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                                 atspiCts.CancelAfter(TimeSpan.FromSeconds(15));
                                 try
                                 {
-                                    var (atspiJson, atspiIdMap) = await atspi.GetMenuJsonForPidAsync(pid, atspiCts.Token);
+                                    var (atspiJson, atspiIdMap, atspiBusName) = await atspi.GetMenuJsonForPidAsync(pid, atspiCts.Token);
                                     if (!string.IsNullOrEmpty(atspiJson) && atspiJson != "{}")
                                     {
                                         logger.LogInformation("  0x{W:X8}: menu from AT-SPI (pid={P})", windowId, pid);
@@ -271,6 +339,35 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                                         }
                                         exporter.UpdateAtSpi(atspiJson, atspi, atspiIdMap);
                                         menuCache[windowId] = atspiJson;
+                                        // Remember this window uses AT-SPI so next focus skips PID scan.
+                                        if (!string.IsNullOrEmpty(atspiBusName))
+                                            windowSources[windowId] = new WindowMenuSource(MenuSourceType.AtSpi, AtSpiBusName: atspiBusName);
+
+                                        // Fire background enrichment: fetch icon-name + shortcut for
+                                        // every node, then push updated JSON. The widget re-renders
+                                        // on its next 150 ms poll — no signal needed.
+                                        var enrichJson  = atspiJson;
+                                        var enrichMap   = atspiIdMap;
+                                        var enrichWinId = windowId;
+                                        _ = Task.Run(async () =>
+                                        {
+                                            try
+                                            {
+                                                using var eCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                                                eCts.CancelAfter(TimeSpan.FromSeconds(30));
+                                                var enriched = await atspi.EnrichMenuJsonAsync(enrichJson, enrichMap, eCts.Token);
+                                                if (enriched != null)
+                                                {
+                                                    exporter.UpdateAtSpi(enriched, atspi, enrichMap);
+                                                    menuCache[enrichWinId] = enriched;
+                                                    logger.LogDebug("  0x{W:X8}: AT-SPI menu enriched with icons/shortcuts", enrichWinId);
+                                                }
+                                            }
+                                            catch (Exception ex)
+                                            {
+                                                logger.LogDebug("  0x{W:X8}: AT-SPI enrichment failed: {M}", enrichWinId, ex.Message);
+                                            }
+                                        }, stoppingToken);
                                         continue;
                                     }
                                 }
@@ -319,6 +416,8 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                 catch (StaleMenuPathException sme)
                 {
                     logger.LogDebug("  0x{W:X8}: stale menu path ({S}) — attempting re-discovery", windowId, sme.Service);
+                    // Remove cached source so next focus re-runs full discovery.
+                    windowSources.TryRemove(windowId, out _);
 
                     // Serve cached menu immediately so the bar isn't blank during re-discovery.
                     if (menuCache.TryGetValue(windowId, out var cachedJson))
@@ -378,7 +477,11 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                 // as a fallback on future focus events where live fetch fails.
                 var liveJson = exporter.LastMenuJson;
                 if (liveJson != "{}" && !string.IsNullOrEmpty(liveJson))
+                {
                     menuCache[windowId] = liveJson;
+                    // Remember this window uses DBus so next focus skips full discovery.
+                    windowSources[windowId] = new WindowMenuSource(MenuSourceType.DbusMenu, Service: service, Path: path);
+                }
             }
         }
         finally

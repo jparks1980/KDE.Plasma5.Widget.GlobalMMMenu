@@ -83,10 +83,10 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
     /// Also returns an ID→(busName,path) map so the exporter can route ExecuteItem calls.
     /// Returns (null, empty) if the app has no menu bar or is not registered on AT-SPI.
     /// </summary>
-    public async Task<(string? Json, Dictionary<int, (string BusName, string Path)> IdMap)>
+    public async Task<(string? Json, Dictionary<int, (string BusName, string Path)> IdMap, string? AtSpiBusName)>
         GetMenuJsonForPidAsync(uint pid, CancellationToken cancellationToken)
     {
-        var empty = (Json: (string?)null, IdMap: new Dictionary<int, (string, string)>());
+        var empty = (Json: (string?)null, IdMap: new Dictionary<int, (string, string)>(), AtSpiBusName: (string?)null);
         if (_atspiConnection == null || _atspiBusDaemon == null)
             return empty;
 
@@ -119,7 +119,8 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
             return empty;
         }
 
-        return await GetMenuJsonFromConnectionAsync(appBusName, cancellationToken);
+        var (json, idMap) = await GetMenuJsonFromConnectionAsync(appBusName, cancellationToken);
+        return (json, idMap, appBusName);
     }
 
     /// <summary>
@@ -276,25 +277,21 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
             return node;
         }
 
-        // ── Icon name + keyboard shortcut (optional, gated by RichMetadata config) ──
-        // Adds ~2 parallel D-Bus round-trips per node. Disabled by default because
-        // GetImageDescriptionAsync calls a D-Bus property (not a method) and may be slow.
+        // ── Keyboard shortcut (optional, gated by RichMetadata config) ──────────────
+        // Fetches the QAction key binding string from org.a11y.atspi.Action.
+        // Note: icon names are NOT available via org.a11y.atspi.Image for Qt menu items
+        // (Qt's AT-SPI bridge uses ImageDescription for image widgets, not action icons).
         if (RichMetadata)
         {
             try
             {
-                var imgProxy    = _atspiConnection!.CreateProxy<IAtSpiImage>(busName, path);
                 var actionProxy = _atspiConnection!.CreateProxy<IAtSpiAction>(busName, path);
-                var iconTask    = imgProxy.GetImageDescriptionAsync();
-                var keyTask     = actionProxy.GetKeyBindingAsync(0);
-                await Task.WhenAll(iconTask, keyTask);
-                if (!string.IsNullOrEmpty(iconTask.Result))
-                    node["icon-name"] = iconTask.Result;
-                var shortcut = ParseAtSpiKeyBinding(keyTask.Result);
+                var keyBinding  = await actionProxy.GetKeyBindingAsync(0);
+                var shortcut    = ParseAtSpiKeyBinding(keyBinding);
                 if (shortcut != null)
                     node["shortcut"] = shortcut;
             }
-            catch { /* interfaces not present on this node */ }
+            catch { /* Action interface not present on this node */ }
         }
 
         if (nodeRole == RoleCheckMenuItem)
@@ -405,6 +402,110 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
             logger.LogDebug("[AT-SPI] GetName({P}) threw {T}: {M}", path, ex.GetType().Name, ex.Message);
             return string.Empty;
         }
+    }
+
+    /// <summary>
+    /// Second-pass enrichment: walks the already-built idMap and fetches icon-name + shortcut
+    /// for every non-separator node in parallel batches, then re-serializes the JSON tree.
+    /// Call this after UpdateAtSpi() has already pushed the fast (no-icon) menu to the widget.
+    /// Returns null if enrichment added nothing new.
+    /// </summary>
+    public async Task<string?> EnrichMenuJsonAsync(
+        string fastJson,
+        Dictionary<int, (string BusName, string Path)> idMap,
+        CancellationToken ct)
+    {
+        if (_atspiConnection == null || idMap.Count == 0) return null;
+
+        JsonElement root;
+        try { root = JsonDocument.Parse(fastJson).RootElement; }
+        catch { return null; }
+
+        // Only enrich non-separator nodes — separators don’t have Action/Image interfaces
+        // and attempting to call them generates a D-Bus error per node.
+        var nonSepIds = new HashSet<int>();
+        CollectEnrichableIds(root, nonSepIds);
+        var entries = idMap.Where(kvp => nonSepIds.Contains(kvp.Key)).ToList();
+        if (entries.Count == 0) return null;
+
+        var enrichments = new Dictionary<int, (string? Icon, object[][]? Shortcut)>();
+
+        // Fetch icon+shortcut in parallel batches of 8 to avoid flooding the AT-SPI socket.
+        const int batchSize = 8;
+        for (int i = 0; i < entries.Count && !ct.IsCancellationRequested; i += batchSize)
+        {
+            var batch = entries.Skip(i).Take(batchSize);
+            var tasks = batch.Select(async kvp =>
+            {
+                var (id, (busName, path)) = kvp;
+                try
+                {
+                    // Note: icon names are not reliably available via org.a11y.atspi.Image for
+                    // Qt menu items (ImageDescription is for image widgets, not action icons).
+                    // Fetch shortcuts only via org.a11y.atspi.Action.
+                    var actionProxy = _atspiConnection!.CreateProxy<IAtSpiAction>(busName, new ObjectPath(path));
+                    var keyBinding  = await actionProxy.GetKeyBindingAsync(0);
+                    var shortcut    = ParseAtSpiKeyBinding(keyBinding);
+                    if (shortcut != null)
+                        return (id, Icon: (string?)null, Shortcut: shortcut);
+                }
+                catch { }
+                return (id, Icon: (string?)null, Shortcut: (object[][]?)null);
+            });
+            foreach (var r in await Task.WhenAll(tasks))
+            {
+                if (r.Shortcut != null)
+                    enrichments[r.id] = (Icon: null, r.Shortcut);
+            }
+        }
+
+        if (enrichments.Count == 0) return null;
+        logger.LogDebug("[AT-SPI] Enriched {N}/{T} nodes with shortcuts", enrichments.Count, idMap.Count);
+
+        // Re-walk the JSON and inject the enrichment fields.
+        var merged = MergeEnrichments(root, enrichments);
+        return JsonSerializer.Serialize(merged, new JsonSerializerOptions { WriteIndented = true });
+    }
+
+    private static void CollectEnrichableIds(JsonElement el, HashSet<int> ids)
+    {
+        if (el.ValueKind != JsonValueKind.Object) return;
+        // Skip separators — they have no Action or Image interfaces.
+        if (el.TryGetProperty("type", out var t) && t.GetString() == "separator") return;
+        if (el.TryGetProperty("id", out var idProp) && idProp.TryGetInt32(out var id) && id > 0)
+            ids.Add(id);
+        if (el.TryGetProperty("children", out var children) && children.ValueKind == JsonValueKind.Array)
+            foreach (var child in children.EnumerateArray())
+                CollectEnrichableIds(child, ids);
+    }
+
+    private static object? MergeEnrichments(JsonElement el, Dictionary<int, (string? Icon, object[][]? Shortcut)> enrichments)
+    {
+        if (el.ValueKind != JsonValueKind.Object) return null;
+
+        var dict = new Dictionary<string, object?>();
+        foreach (var prop in el.EnumerateObject())
+            dict[prop.Name] = prop.Value.ValueKind switch
+            {
+                JsonValueKind.String  => prop.Value.GetString(),
+                JsonValueKind.Number  => prop.Value.TryGetInt32(out var i) ? (object)i : prop.Value.GetDouble(),
+                JsonValueKind.True    => true,
+                JsonValueKind.False   => false,
+                JsonValueKind.Null    => null,
+                JsonValueKind.Array   => prop.Name == "children"
+                    ? prop.Value.EnumerateArray().Select(c => MergeEnrichments(c, enrichments)).ToList()
+                    : (object?)prop.Value.ToString(),
+                _                     => prop.Value.ToString(),
+            };
+
+        if (dict.TryGetValue("id", out var idObj) && idObj is int nodeId
+            && enrichments.TryGetValue(nodeId, out var e))
+        {
+            if (e.Icon != null)     dict["icon-name"] = e.Icon;
+            if (e.Shortcut != null) dict["shortcut"]  = e.Shortcut;
+        }
+
+        return dict;
     }
 
     public ValueTask DisposeAsync()

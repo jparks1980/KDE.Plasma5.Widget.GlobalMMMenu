@@ -61,18 +61,7 @@ public interface IAtSpiAction : IDBusObject
 }
 
 /// <summary>
-/// org.a11y.atspi.Image — exposes icon information.
-/// Qt’s AT-SPI bridge maps QAction::icon().name() to GetImageDescriptionAsync(),
-/// giving us the theme icon name (e.g. “document-new”) for menu items that have icons.
-/// </summary>
-[DBusInterface("org.a11y.atspi.Image")]
-public interface IAtSpiImage : IDBusObject
-{
-    /// <summary>Returns the accessible description of the image (icon name for Qt menu items).</summary>
-    Task<string> GetImageDescriptionAsync();
-}
 
-/// <summary>
 /// org.freedesktop.DBus daemon interface — separate C# type for use on the AT-SPI bus.
 /// IFreedesktopDBus is already proxied on the session bus connection in Worker; reusing
 /// it on the AT-SPI connection would cause a Tmds.DBus "Duplicate type name" collision
