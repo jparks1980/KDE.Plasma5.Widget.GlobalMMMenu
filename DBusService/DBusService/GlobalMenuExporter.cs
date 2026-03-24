@@ -53,11 +53,20 @@ public class GlobalMenuExporter : IGlobalMenuService
     /// <summary>
     /// Stores an AT-SPI menu. The JSON must contain "id", "atspi-bus", "atspi-path"
     /// fields on every leaf node — these are used for execution routing.
+    /// <para>
+    /// <paramref name="dbusMenu"/> is optional. When supplied (after a DBus icon-merge pass
+    /// that may have injected DBus submenu children), item IDs that are NOT in
+    /// <paramref name="idMap"/> will be routed through the DBus proxy instead of AT-SPI.
+    /// This handles cases where Qt's AT-SPI bridge did not populate a lazy submenu
+    /// (e.g. Dolphin's "Create New") — those children come straight from the DBus layout
+    /// and must be executed via <c>EventAsync</c>.
+    /// </para>
     /// </summary>
-    public void UpdateAtSpi(string menuJson, AtSpiMenuReader reader, Dictionary<int, (string BusName, string Path)> idMap)
+    public void UpdateAtSpi(string menuJson, AtSpiMenuReader reader,
+        Dictionary<int, (string BusName, string Path)> idMap, IDbusMenu? dbusMenu = null)
     {
         _menuJson    = menuJson;
-        _activeMenu  = null;
+        _activeMenu  = dbusMenu;
         _atspiReader = reader;
         _atspiIdMap.Clear();
         foreach (var (k, v) in idMap)

@@ -28,15 +28,18 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
     private enum MenuSourceType { DbusMenu, AtSpi }
     private sealed record WindowMenuSource(
         MenuSourceType Type,
-        string? Service     = null,   // DBus service name (DbusMenu)
-        string? Path        = null,   // DBus object path  (DbusMenu)
-        string? AtSpiBusName = null); // AT-SPI bus unique name (AtSpi)
+        string? Service      = null,   // DBus service name (DbusMenu fast path)
+        string? Path         = null,   // DBus object path  (DbusMenu fast path)
+        string? AtSpiBusName = null,   // AT-SPI bus unique name (AtSpi)
+        string? DbusService  = null,   // DBus service used for icon merge (AtSpi windows)
+        string? DbusPath     = null,   // DBus path used for icon merge (AtSpi windows)
+        IReadOnlyDictionary<int, (string BusName, string Path)>? IdMap = null); // cached for instant re-focus
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         // ── Build-identity banner — proves which binary is running ─────────────
         // Update this string whenever you want to confirm a fresh binary is loaded.
-        logger.LogInformation("=== DBusService build: 2026-03-23-v6 (window source cache + no icon spam) ===");
+        logger.LogInformation("=== DBusService build: 2026-03-24-v7 (AT-SPI first + DBus icon/submenu merge) ===");
 
         using var connection = new Connection(Address.Session!);
         await connection.ConnectAsync();
@@ -124,17 +127,17 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
         // on subsequent focus events and go straight to the confirmed provider.
         var windowSources = new ConcurrentDictionary<uint, WindowMenuSource>();
         var prefetchEnabled = configuration.GetValue<bool>("GlobalMMMenu:EnablePrefetch", false);
-        var prefetchTask = prefetchEnabled
-            ? Task.Run(() => PrefetchMenusAsync(connection, dbus, x11, registrarImpl, menuCache, stoppingToken), stoppingToken)
-            : Task.CompletedTask;
-        if (!prefetchEnabled)
-            logger.LogInformation("[Prefetch] Background menu discovery disabled (EnablePrefetch=false)");
-
         // AT-SPI reader — used as last resort for apps that have no dbusmenu object
         // (e.g. started before the registrar, or Qt builds that skip dbusmenu init).
         await using var atspi = new AtSpiMenuReader(logger);
         var atspiAvailable = await atspi.ConnectAsync();
         atspi.RichMetadata = configuration.GetValue<bool>("GlobalMMMenu:AtSpiRichMetadata", false);
+
+        var prefetchTask = prefetchEnabled
+            ? Task.Run(() => PrefetchMenusAsync(connection, dbus, x11, registrarImpl, menuCache, windowSources, atspi, stoppingToken), stoppingToken)
+            : Task.CompletedTask;
+        if (!prefetchEnabled)
+            logger.LogInformation("[Prefetch] Background menu discovery disabled (EnablePrefetch=false)");
 
         try
         {
@@ -168,7 +171,79 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                     if (knownSrc.Type == MenuSourceType.AtSpi && atspiAvailable
                         && !string.IsNullOrEmpty(knownSrc.AtSpiBusName))
                     {
-                        // AT-SPI fast path — skip the PID→bus-name scan, walk tree directly.
+                        // ── Icon cache hit: serve fully-enriched menu instantly ───────────────
+                        // After the first focus the merged+enriched JSON (icons + shortcuts +
+                        // lazy submenus) is stored in menuCache and the idMap is stored in
+                        // windowSources. On re-focus we serve from cache immediately — zero
+                        // extra D-Bus round-trips on the focus thread — then refresh the
+                        // AT-SPI tree + re-merge in the background to pick up any changes.
+                        if (menuCache.TryGetValue(windowId, out var cachedFull) && knownSrc.IdMap != null)
+                        {
+                            var cachedIdMap = new Dictionary<int, (string BusName, string Path)>(knownSrc.IdMap);
+                            IDbusMenu? cachedProxy = null;
+                            if (!string.IsNullOrEmpty(knownSrc.DbusService) && !string.IsNullOrEmpty(knownSrc.DbusPath))
+                                cachedProxy = connection.CreateProxy<IDbusMenu>(
+                                    knownSrc.DbusService!, new ObjectPath(knownSrc.DbusPath!));
+                            exporter.UpdateAtSpi(cachedFull, atspi, cachedIdMap, cachedProxy);
+                            logger.LogInformation("  0x{W:X8}: fast-path AT-SPI (icons cached)", windowId);
+
+                            // Background: refresh AT-SPI + re-merge DBus to catch menu structure changes.
+                            var fWinId = windowId; var fSrc = knownSrc;
+                            _ = Task.Run(async () =>
+                            {
+                                try
+                                {
+                                    using var rCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                                    rCts.CancelAfter(TimeSpan.FromSeconds(15));
+                                    var (freshJson, freshMap) = await atspi.GetMenuJsonFromConnectionAsync(
+                                        fSrc.AtSpiBusName!, rCts.Token);
+                                    if (string.IsNullOrEmpty(freshJson) || freshJson == "{}") return;
+
+                                    if (!string.IsNullOrEmpty(fSrc.DbusService) && !string.IsNullOrEmpty(fSrc.DbusPath))
+                                    {
+                                        using var mCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                                        mCts.CancelAfter(TimeSpan.FromSeconds(10));
+                                        var (dbJson, dbProxy) = await FetchDbusMenuJsonAsync(
+                                            connection, fSrc.DbusService!, fSrc.DbusPath!, mCts.Token);
+                                        if (dbJson != null && dbProxy != null)
+                                        {
+                                            var merged = AtSpiMenuReader.MergeDbusIconsIntoAtSpiJson(freshJson, dbJson);
+                                            if (merged != null)
+                                            {
+                                                exporter.UpdateAtSpi(merged, atspi, freshMap, dbProxy);
+                                                menuCache[fWinId] = merged;
+                                                using var eCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                                                eCts.CancelAfter(TimeSpan.FromSeconds(20));
+                                                var enriched = await atspi.EnrichMenuJsonAsync(merged, freshMap, eCts.Token);
+                                                if (enriched != null)
+                                                {
+                                                    exporter.UpdateAtSpi(enriched, atspi, freshMap, dbProxy);
+                                                    menuCache[fWinId] = enriched;
+                                                }
+                                                windowSources[fWinId] = fSrc with { IdMap = freshMap };
+                                                logger.LogDebug("  0x{W:X8}: fast-path icon cache refreshed", fWinId);
+                                                return;
+                                            }
+                                        }
+                                    }
+                                    // No DBus — enrich shortcuts only.
+                                    using var eCts2 = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                                    eCts2.CancelAfter(TimeSpan.FromSeconds(20));
+                                    var enrichedOnly = await atspi.EnrichMenuJsonAsync(freshJson, freshMap, eCts2.Token);
+                                    var finalOnly = enrichedOnly ?? freshJson;
+                                    exporter.UpdateAtSpi(finalOnly, atspi, freshMap);
+                                    menuCache[fWinId] = finalOnly;
+                                    windowSources[fWinId] = fSrc with { IdMap = freshMap };
+                                }
+                                catch (Exception ex)
+                                {
+                                    logger.LogDebug("  0x{W:X8}: fast-path icon-cache refresh failed: {M}", fWinId, ex.Message);
+                                }
+                            }, stoppingToken);
+                            continue;
+                        }
+
+                        // No icon cache yet — do a full AT-SPI scan and background DBus merge.
                         using var fastCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
                         fastCts.CancelAfter(TimeSpan.FromSeconds(15));
                         try
@@ -179,7 +254,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                                 logger.LogInformation("  0x{W:X8}: fast-path AT-SPI (bus={B})", windowId, knownSrc.AtSpiBusName);
                                 exporter.UpdateAtSpi(fJson, atspi, fMap);
                                 menuCache[windowId] = fJson;
-                                var fEnrichJson = fJson; var fEnrichMap = fMap; var fWinId = windowId;
+                                var fEnrichJson = fJson; var fEnrichMap = fMap; var fWinId2 = windowId;
                                 _ = Task.Run(async () =>
                                 {
                                     try
@@ -190,11 +265,11 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                                         if (enriched != null)
                                         {
                                             exporter.UpdateAtSpi(enriched, atspi, fEnrichMap);
-                                            menuCache[fWinId] = enriched;
-                                            logger.LogDebug("  0x{W:X8}: fast-path AT-SPI shortcuts enriched", fWinId);
+                                            menuCache[fWinId2] = enriched;
+                                            logger.LogDebug("  0x{W:X8}: fast-path AT-SPI shortcuts enriched", fWinId2);
                                         }
                                     }
-                                    catch (Exception ex) { logger.LogDebug("  0x{W:X8}: fast-path enrichment failed: {M}", fWinId, ex.Message); }
+                                    catch (Exception ex) { logger.LogDebug("  0x{W:X8}: fast-path enrichment failed: {M}", fWinId2, ex.Message); }
                                 }, stoppingToken);
                                 continue;
                             }
@@ -217,6 +292,135 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                     }
                 }
 
+                // ── AT-SPI first: show menu structure immediately ────────────────────────────
+                // AT-SPI is always available for Qt/KDE apps and returns the menu tree without
+                // needing DBus registrar registration. We display it right away, then try DBus
+                // in the background to enrich it with real icon-name / icon-data fields.
+                // If DBus is unavailable or times out, EnrichMenuJsonAsync applies shortcuts and
+                // the built-in FreeDesktop label-icon table as a fallback.
+                if (atspiAvailable)
+                {
+                    var atspiPid = x11.GetWindowPid((IntPtr)windowId);
+                    if (atspiPid != 0)
+                    {
+                        using var atspiFirstCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                        atspiFirstCts.CancelAfter(TimeSpan.FromSeconds(15));
+                        try
+                        {
+                            var (atspiJson, atspiIdMap, atspiBusName) =
+                                await atspi.GetMenuJsonForPidAsync(atspiPid, atspiFirstCts.Token);
+                            if (!string.IsNullOrEmpty(atspiJson) && atspiJson != "{}")
+                            {
+                                logger.LogInformation(
+                                    "  0x{W:X8}: AT-SPI menu (pid={P}) — showing immediately, fetching DBus icons in background",
+                                    windowId, atspiPid);
+                                exporter.UpdateAtSpi(atspiJson, atspi, atspiIdMap);
+                                menuCache[windowId] = atspiJson;
+                                if (!string.IsNullOrEmpty(atspiBusName))
+                                    windowSources[windowId] = new WindowMenuSource(MenuSourceType.AtSpi, AtSpiBusName: atspiBusName);
+
+                                // Background: find the DBus menu, fetch it, merge its icons onto the
+                                // AT-SPI JSON structure. Falls back to shortcut + label-icon-table
+                                // enrichment when no DBus menu is found or icons are missing.
+                                var bgAtSpiJson = atspiJson;
+                                var bgIdMap     = atspiIdMap;
+                                var bgWinId     = windowId;
+                                _ = Task.Run(async () =>
+                                {
+                                    try
+                                    {
+                                        using var bgCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                                        bgCts.CancelAfter(TimeSpan.FromSeconds(10));
+
+                                        // Check registrar first (fastest), then fall back to PID scan.
+                                        string? dbSvc = null, dbPath = null;
+                                        var (rsi, rpi) = registrarImpl.TryGetMenu(bgWinId);
+                                        if (!string.IsNullOrEmpty(rsi) && !string.IsNullOrEmpty(rpi) && rpi != "/")
+                                        {
+                                            dbSvc  = rsi;
+                                            dbPath = rpi;
+                                        }
+                                        else
+                                        {
+                                            (dbSvc, dbPath) = await FindMenuByPidAsync(
+                                                connection, dbus, x11, registrarImpl, bgWinId, null, bgCts.Token);
+                                        }
+
+                                        if (!string.IsNullOrEmpty(dbSvc) && !string.IsNullOrEmpty(dbPath) && dbPath != "/")
+                                        {
+                                            // Fetch the full DBus layout with 3-depth AboutToShow priming
+                                            // so lazy submenus (Dolphin "Create New" etc.) are populated.
+                                            var (dbJson, dbMenu) = await FetchDbusMenuJsonAsync(
+                                                connection, dbSvc, dbPath, bgCts.Token);
+                                            if (dbJson != null && dbMenu != null)
+                                            {
+                                                var merged = AtSpiMenuReader.MergeDbusIconsIntoAtSpiJson(bgAtSpiJson, dbJson);
+                                                if (merged != null)
+                                                {
+                                                    exporter.UpdateAtSpi(merged, atspi, bgIdMap, dbMenu);
+                                                    menuCache[bgWinId] = merged;
+                                                    logger.LogDebug(
+                                                        "  0x{W:X8}: DBus data merged onto AT-SPI menu ({S})", bgWinId, dbSvc);
+
+                                                    // Enrich with shortcuts — use a fresh CTS since bgCts may
+                                                    // be near its 10 s limit after the DBus fetch above.
+                                                    using var eCts2 = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                                                    eCts2.CancelAfter(TimeSpan.FromSeconds(20));
+                                                    var enrichedMerged = await atspi.EnrichMenuJsonAsync(merged, bgIdMap, eCts2.Token);
+                                                    if (enrichedMerged != null)
+                                                    {
+                                                        exporter.UpdateAtSpi(enrichedMerged, atspi, bgIdMap, dbMenu);
+                                                        menuCache[bgWinId] = enrichedMerged;
+                                                        logger.LogDebug("  0x{W:X8}: merged menu enriched with shortcuts", bgWinId);
+                                                    }
+                                                    // Store DBus location + idMap so re-focus serves the
+                                                    // fully-enriched menu from cache with zero D-Bus calls.
+                                                    windowSources[bgWinId] = new WindowMenuSource(
+                                                        MenuSourceType.AtSpi,
+                                                        AtSpiBusName: atspiBusName,
+                                                        DbusService: dbSvc,
+                                                        DbusPath: dbPath,
+                                                        IdMap: bgIdMap);
+                                                    return;
+                                                }
+                                            }
+                                            logger.LogDebug(
+                                                "  0x{W:X8}: DBus menu found but no data to merge — using label table", bgWinId);
+                                        }
+                                        else
+                                        {
+                                            logger.LogDebug(
+                                                "  0x{W:X8}: no DBus menu found for icon enrichment", bgWinId);
+                                        }
+
+                                        // No DBus icons available — enrich with shortcuts + FreeDesktop label-icon table.
+                                        using var eCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                                        eCts.CancelAfter(TimeSpan.FromSeconds(20));
+                                        var enriched = await atspi.EnrichMenuJsonAsync(bgAtSpiJson, bgIdMap, eCts.Token);
+                                        if (enriched != null)
+                                        {
+                                            exporter.UpdateAtSpi(enriched, atspi, bgIdMap);
+                                            menuCache[bgWinId] = enriched;
+                                            logger.LogDebug("  0x{W:X8}: AT-SPI menu enriched with shortcuts/icons", bgWinId);
+                                        }
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        logger.LogDebug("  0x{W:X8}: background icon enrichment failed: {M}", bgWinId, ex.Message);
+                                    }
+                                }, stoppingToken);
+
+                                continue; // AT-SPI menu is displayed; skip DBus discovery below.
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            logger.LogDebug("  0x{W:X8}: AT-SPI first-try failed: {M}", windowId, ex.Message);
+                        }
+                    }
+                }
+
+                // ── AT-SPI unavailable or returned no menu — fall back to DBus discovery ───────
                 // Always check the live registrar first. A fully-resolved entry is always preferred
                 // over X11 props, which may carry a stale unique bus name (":1.XXXX") from a previous
                 // service run — using a dead bus name triggers a ServiceUnknown error downstream.
@@ -312,73 +516,9 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
 
                     if (string.IsNullOrEmpty(service) || string.IsNullOrEmpty(path) || path == "/")
                     {
-                        // ── AT-SPI fallback ──────────────────────────────────────────────
-                        // For apps that have no dbusmenu object (started before registrar,
-                        // or Qt build that skips dbusmenu init), read the menu via the
-                        // accessibility tree. Works unconditionally for all Qt/KDE apps.
-                        if (atspiAvailable)
-                        {
-                            var pid = x11.GetWindowPid((IntPtr)windowId);
-                            if (pid != 0)
-                            {
-                                using var atspiCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
-                                atspiCts.CancelAfter(TimeSpan.FromSeconds(15));
-                                try
-                                {
-                                    var (atspiJson, atspiIdMap, atspiBusName) = await atspi.GetMenuJsonForPidAsync(pid, atspiCts.Token);
-                                    if (!string.IsNullOrEmpty(atspiJson) && atspiJson != "{}")
-                                    {
-                                        logger.LogInformation("  0x{W:X8}: menu from AT-SPI (pid={P})", windowId, pid);
-                                        var atspiMode = GetMenuLogMode();
-                                        if (atspiMode != MenuLogMode.None)
-                                        {
-                                            var display = atspiMode == MenuLogMode.Limited && atspiJson.Length > 250
-                                                ? atspiJson[..250].ReplaceLineEndings(" ") + "..."
-                                                : atspiJson;
-                                            logger.LogInformation("  [AT-SPI] Menu:\n{Json}", display);
-                                        }
-                                        exporter.UpdateAtSpi(atspiJson, atspi, atspiIdMap);
-                                        menuCache[windowId] = atspiJson;
-                                        // Remember this window uses AT-SPI so next focus skips PID scan.
-                                        if (!string.IsNullOrEmpty(atspiBusName))
-                                            windowSources[windowId] = new WindowMenuSource(MenuSourceType.AtSpi, AtSpiBusName: atspiBusName);
-
-                                        // Fire background enrichment: fetch icon-name + shortcut for
-                                        // every node, then push updated JSON. The widget re-renders
-                                        // on its next 150 ms poll — no signal needed.
-                                        var enrichJson  = atspiJson;
-                                        var enrichMap   = atspiIdMap;
-                                        var enrichWinId = windowId;
-                                        _ = Task.Run(async () =>
-                                        {
-                                            try
-                                            {
-                                                using var eCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
-                                                eCts.CancelAfter(TimeSpan.FromSeconds(30));
-                                                var enriched = await atspi.EnrichMenuJsonAsync(enrichJson, enrichMap, eCts.Token);
-                                                if (enriched != null)
-                                                {
-                                                    exporter.UpdateAtSpi(enriched, atspi, enrichMap);
-                                                    menuCache[enrichWinId] = enriched;
-                                                    logger.LogDebug("  0x{W:X8}: AT-SPI menu enriched with icons/shortcuts", enrichWinId);
-                                                }
-                                            }
-                                            catch (Exception ex)
-                                            {
-                                                logger.LogDebug("  0x{W:X8}: AT-SPI enrichment failed: {M}", enrichWinId, ex.Message);
-                                            }
-                                        }, stoppingToken);
-                                        continue;
-                                    }
-                                }
-                                catch (Exception ex)
-                                {
-                                    logger.LogDebug("  0x{W:X8}: AT-SPI fallback failed: {M}", windowId, ex.Message);
-                                }
-                            }
-                        }
-
-                        // Last resort: serve cached menu so the bar isn't blank.
+                        // AT-SPI was already tried first (above) and returned no menu,
+                        // so there is no point retrying it here. Serve cached JSON so the
+                        // bar is not blank, or log that no menu was found.
                         if (menuCache.TryGetValue(windowId, out var cachedJson))
                         {
                             logger.LogInformation("  0x{W:X8}: no live menu found — serving cached menu", windowId);
@@ -507,6 +647,8 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
         X11ActiveWindowMonitor x11,
         AppMenuRegistrarImpl registrar,
         ConcurrentDictionary<uint, string> menuCache,
+        ConcurrentDictionary<uint, WindowMenuSource> windowSources,
+        AtSpiMenuReader atspi,
         CancellationToken stoppingToken)
     {
         // Wait for startup to fully settle before scanning.
@@ -540,6 +682,12 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                 var (xs, xp) = x11.GetWindowMenuInfo((IntPtr)windowId);
                 if (!string.IsNullOrEmpty(xs) && !string.IsNullOrEmpty(xp)) continue;
 
+                // Skip windows whose icon cache is already fully built — the main loop
+                // will use the cache on focus and the fast-path background refresh will
+                // keep it up-to-date on its own.
+                if (windowSources.TryGetValue(windowId, out var existingSrc)
+                    && existingSrc.IdMap != null) continue;
+
                 // Gentle delay between windows so we don't flood D-Bus.
                 await Task.Delay(300, stoppingToken);
 
@@ -552,50 +700,58 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                     if (string.IsNullOrEmpty(service) || string.IsNullOrEmpty(path))
                         continue;
 
-                    // Store results so the main loop finds them instantly on focus.
+                    // Store DBus results so the main loop finds them on focus.
                     registrar.StoreResolved(windowId, service, path);
                     x11.SetWindowMenuInfo((IntPtr)windowId, service, path);
                     discovered++;
                     logger.LogInformation("[Prefetch] 0x{W:X8}: discovered {S} {P}", windowId, service, path);
 
-                    // Pre-fetch the menu JSON to warm the cache using the same
-                    // AboutToShow + GetLayout sequence as the main loop.
-                    using var fetchCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
-                    fetchCts.CancelAfter(TimeSpan.FromSeconds(5));
+                    // ── Icon-cache warm: AT-SPI + DBus merge + shortcut enrichment ──────────
+                    // Run the same pipeline as the cold path so that when the user first
+                    // focuses this window the fully-enriched menu (icons + lazy submenus +
+                    // shortcuts) is already in cache and served instantly.
+                    using var warmCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                    warmCts.CancelAfter(TimeSpan.FromSeconds(30));
                     try
                     {
-                        var menu = connection.CreateProxy<IDbusMenu>(service, new ObjectPath(path));
-                        _ = menu.AboutToShowAsync(0);  // fire-and-forget to trigger lazy populate
-                        await Task.Delay(50, stoppingToken);
+                        var pid = x11.GetWindowPid((IntPtr)windowId);
+                        if (pid == 0) goto skipIconCache;
 
-                        var shallowTask = menu.GetLayoutAsync(0, 1, []);
-                        await Task.WhenAny(shallowTask, Task.Delay(Timeout.Infinite, fetchCts.Token));
-                        if (!shallowTask.IsCompletedSuccessfully) goto skipCache;
+                        // Step 1: AT-SPI tree.
+                        var (atspiJson, atspiIdMap, atspiBusName) =
+                            await atspi.GetMenuJsonForPidAsync(pid, warmCts.Token);
+                        if (string.IsNullOrEmpty(atspiJson) || atspiJson == "{}") goto skipIconCache;
 
-                        foreach (var raw in shallowTask.Result.Layout.Children)
-                        {
-                            if (raw is ValueTuple<int, IDictionary<string, object>, object[]> child)
-                                _ = menu.AboutToShowAsync(child.Item1);
-                        }
-                        await Task.Delay(50, stoppingToken);
+                        // Step 2: DBus full layout (3-depth AboutToShow pass).
+                        var (dbJson, _) = await FetchDbusMenuJsonAsync(connection, service, path, warmCts.Token);
+                        if (dbJson == null) goto skipIconCache;
 
-                        var deepTask = menu.GetLayoutAsync(0, -1, []);
-                        await Task.WhenAny(deepTask, Task.Delay(Timeout.Infinite, fetchCts.Token));
-                        if (!deepTask.IsCompletedSuccessfully) goto skipCache;
+                        // Step 3: Merge icons + lazy submenu children.
+                        var merged = AtSpiMenuReader.MergeDbusIconsIntoAtSpiJson(atspiJson, dbJson);
+                        var postMerge = merged ?? atspiJson;
 
-                        var (_, layout) = deepTask.Result;
-                        var tree = BuildMenuNode(layout.Id, layout.Properties, layout.Children);
-                        var json = JsonSerializer.Serialize(tree, JsonOptions);
-                        if (json.Length > 2)
-                        {
-                            menuCache[windowId] = json;
-                            logger.LogInformation("[Prefetch] 0x{W:X8}: menu JSON cached ({Len} chars)", windowId, json.Length);
-                        }
-                        skipCache:;
+                        // Step 4: Enrich with keyboard shortcuts.
+                        var enriched = await atspi.EnrichMenuJsonAsync(postMerge, atspiIdMap, warmCts.Token);
+                        var final = enriched ?? postMerge;
+
+                        menuCache[windowId] = final;
+
+                        // Store the source record with the full idMap so re-focus hits cache.
+                        var src = new WindowMenuSource(
+                            MenuSourceType.AtSpi,
+                            AtSpiBusName: atspiBusName,
+                            DbusService:  service,
+                            DbusPath:     path,
+                            IdMap:        atspiIdMap);
+                        windowSources[windowId] = src;
+
+                        logger.LogInformation(
+                            "[Prefetch] 0x{W:X8}: icon cache warmed ({Len} chars)", windowId, final.Length);
+                        skipIconCache:;
                     }
                     catch (Exception ex)
                     {
-                        logger.LogDebug("[Prefetch] 0x{W:X8}: cache-warm failed: {M}", windowId, ex.Message);
+                        logger.LogDebug("[Prefetch] 0x{W:X8}: icon-cache warm failed: {M}", windowId, ex.Message);
                     }
                 }
                 catch (OperationCanceledException) when (!stoppingToken.IsCancellationRequested)
@@ -1087,5 +1243,52 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
         }
 
         return node;
+    }
+
+    /// <summary>
+    /// Primes a DBus menu with a three-depth <c>AboutToShow</c> pass so that lazily-populated
+    /// submenus (e.g. Dolphin "Create New", "Open Recent") are fully populated before the
+    /// deep layout is fetched. Returns the serialised JSON and the proxy, or (null, null) on
+    /// any error (service vanished, timeout, etc.).
+    /// </summary>
+    private static async Task<(string? Json, IDbusMenu? Proxy)> FetchDbusMenuJsonAsync(
+        Connection connection, string service, string path, CancellationToken ct)
+    {
+        // Collects all IDs at every depth of the given raw children array.
+        static IEnumerable<int> AllIds(object[] children)
+        {
+            foreach (var r in children)
+                if (r is ValueTuple<int, IDictionary<string, object>, object[]> n)
+                {
+                    yield return n.Item1;
+                    foreach (var id in AllIds(n.Item3))
+                        yield return id;
+                }
+        }
+        try
+        {
+            var proxy = connection.CreateProxy<IDbusMenu>(service, new ObjectPath(path));
+            _ = proxy.AboutToShowAsync(0);
+            await Task.Delay(50, ct);
+
+            var (_, shallow) = await proxy.GetLayoutAsync(0, 1, []);
+            foreach (var raw in shallow.Children)
+                if (raw is ValueTuple<int, IDictionary<string, object>, object[]> c)
+                    _ = proxy.AboutToShowAsync(c.Item1);
+            if (shallow.Children.Length > 0)
+                await Task.Delay(50, ct);
+
+            var (_, depth2) = await proxy.GetLayoutAsync(0, 2, []);
+            foreach (var id in AllIds(depth2.Children))
+                _ = proxy.AboutToShowAsync(id);
+            if (depth2.Children.Length > 0)
+                await Task.Delay(50, ct);
+
+            var (_, deep) = await proxy.GetLayoutAsync(0, -1, []);
+            var tree = BuildMenuNode(deep.Id, deep.Properties, deep.Children);
+            var json = JsonSerializer.Serialize(tree, JsonOptions);
+            return (json, proxy);
+        }
+        catch { return (null, null); }
     }
 }

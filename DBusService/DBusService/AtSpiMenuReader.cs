@@ -527,20 +527,204 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
     }
 
     /// <summary>
-    /// Normalises a menu item label and looks it up in the standard FreeDesktop icon table.
-    /// Strips mnemonic ampersands (e.g. "&amp;File"), trailing ellipsis, and surrounding
-    /// whitespace before matching. Returns null when no match is found.
+    /// Normalises a label string for lookup: strips mnemonic markers (<c>&amp;</c> for AT-SPI,
+    /// <c>_</c> for DBus), trailing ellipsis, and surrounding whitespace, then lowercases.
     /// </summary>
-    private static string? GuessIconFromLabel(string? label)
+    private static string NormalizeLabel(string? label)
     {
-        if (string.IsNullOrWhiteSpace(label)) return null;
-        var key = label
-            .Replace("&", "")       // strip mnemonic markers
+        if (label == null) return string.Empty;
+        return label
+            .Replace("_", "")       // strip DBus mnemonic markers
+            .Replace("&", "")       // strip AT-SPI mnemonic markers
             .Replace("\u2026", "")  // strip unicode ellipsis …
             .TrimEnd('.')           // strip trailing ASCII dots
             .Trim()
             .ToLowerInvariant();
-        return s_labelIconMap.TryGetValue(key, out var icon) ? icon : null;
+    }
+
+    /// <summary>
+    /// Normalises a menu item label and looks it up in the standard FreeDesktop icon table.
+    /// Returns null when no match is found.
+    /// </summary>
+    private static string? GuessIconFromLabel(string? label)
+    {
+        if (string.IsNullOrWhiteSpace(label)) return null;
+        var key = NormalizeLabel(label);
+        return string.IsNullOrEmpty(key) ? null : s_labelIconMap.TryGetValue(key, out var icon) ? icon : null;
+    }
+
+    // Holds the DBus-side data for a single menu node: icons plus already-converted children
+    // (converted eagerly so we don't hold dangling JsonElement refs after the doc is disposed).
+    private sealed record DbusNodeData(
+        string?       IconName,
+        string?       IconData,
+        List<object?>? Children);
+
+    /// <summary>
+    /// Merges DBus icon and submenu data onto an AT-SPI menu JSON tree.
+    /// Nodes are matched by normalised label. Two kinds of enrichment are applied:
+    /// <list type="bullet">
+    ///   <item><c>icon-name</c> / <c>icon-data</c> — copied when the AT-SPI node has none.</item>
+    ///   <item>Missing submenu <c>children</c> — injected when AT-SPI shows a leaf but DBus has
+    ///     children (Qt's AT-SPI bridge only populates lazy submenus after they are opened;
+    ///     DBus's AboutToShow + GetLayout triggers that population up-front).</item>
+    /// </list>
+    /// Returns the merged JSON string when at least one field was added; otherwise null.
+    /// </summary>
+    public static string? MergeDbusIconsIntoAtSpiJson(string atspiJson, string dbusJson)
+    {
+        JsonElement atspiRoot;
+        // Keep the documents alive until we are done reading JsonElements from them.
+        using var atspiDoc = JsonDocument.Parse(atspiJson);
+        using var dbusDoc  = JsonDocument.Parse(dbusJson);
+        atspiRoot = atspiDoc.RootElement;
+        var dbusRoot = dbusDoc.RootElement;
+
+        // Build label → DbusNodeData from the flat DBus tree.
+        // Children are converted to object? dicts immediately so they don't reference
+        // JsonElement objects that would become invalid after dbusDoc is disposed.
+        var nodeMap = new Dictionary<string, DbusNodeData>(StringComparer.Ordinal);
+        CollectDbusNodes(dbusRoot, nodeMap);
+        if (nodeMap.Count == 0) return null;
+
+        bool anyAdded = false;
+        var merged = MergeDbusDataIntoNode(atspiRoot, nodeMap, ref anyAdded);
+        if (!anyAdded) return null;
+
+        return JsonSerializer.Serialize(merged, new JsonSerializerOptions { WriteIndented = true });
+    }
+
+    /// <summary>
+    /// Walks a DBus menu JSON element and collects normalised-label → <see cref="DbusNodeData"/>
+    /// mappings. Children are converted eagerly to avoid holding dangling JsonElement refs.
+    /// </summary>
+    private static void CollectDbusNodes(JsonElement el, Dictionary<string, DbusNodeData> map)
+    {
+        if (el.ValueKind != JsonValueKind.Object) return;
+
+        var label    = el.TryGetProperty("label",     out var lp) ? lp.GetString() : null;
+        var iconName = el.TryGetProperty("icon-name", out var ip) ? ip.GetString() : null;
+        var iconData = el.TryGetProperty("icon-data", out var dp) ? dp.GetString() : null;
+
+        List<object?>? kids = null;
+        if (el.TryGetProperty("children", out var childProp) && childProp.ValueKind == JsonValueKind.Array)
+        {
+            kids = [];
+            foreach (var child in childProp.EnumerateArray())
+            {
+                var converted = ConvertDbusElement(child);
+                if (converted != null) kids.Add(converted);
+            }
+            if (kids.Count == 0) kids = null;
+        }
+
+        if (!string.IsNullOrEmpty(label) && (iconName != null || iconData != null || kids != null))
+        {
+            var key = NormalizeLabel(label);
+            if (!string.IsNullOrEmpty(key) && !map.ContainsKey(key))
+                map[key] = new DbusNodeData(iconName, iconData, kids);
+        }
+
+        // Recurse for icons/children at deeper levels.
+        if (el.TryGetProperty("children", out var recProp) && recProp.ValueKind == JsonValueKind.Array)
+            foreach (var child in recProp.EnumerateArray())
+                CollectDbusNodes(child, map);
+    }
+
+    /// <summary>
+    /// Converts a DBus-side <see cref="JsonElement"/> to a plain <c>object?</c> dictionary
+    /// that can be serialised with <see cref="JsonSerializer"/>.
+    /// Called while the owning <see cref="JsonDocument"/> is still alive.
+    /// </summary>
+    private static object? ConvertDbusElement(JsonElement el)
+    {
+        if (el.ValueKind != JsonValueKind.Object) return null;
+        var dict = new Dictionary<string, object?>();
+        foreach (var prop in el.EnumerateObject())
+        {
+            if (prop.Name == "children" && prop.Value.ValueKind == JsonValueKind.Array)
+            {
+                var kids = new List<object?>();
+                foreach (var child in prop.Value.EnumerateArray())
+                    kids.Add(ConvertDbusElement(child));
+                dict[prop.Name] = kids;
+            }
+            else
+            {
+                dict[prop.Name] = prop.Value.ValueKind switch
+                {
+                    JsonValueKind.String => prop.Value.GetString(),
+                    JsonValueKind.Number => prop.Value.TryGetInt32(out var i) ? (object)i : prop.Value.GetDouble(),
+                    JsonValueKind.True   => true,
+                    JsonValueKind.False  => false,
+                    JsonValueKind.Null   => null,
+                    _                   => prop.Value.ToString(),
+                };
+            }
+        }
+        return dict;
+    }
+
+    /// <summary>
+    /// Recursively re-serialises an AT-SPI JSON element, injecting DBus icon fields and
+    /// missing submenu children from <paramref name="nodeMap"/> where labels match.
+    /// </summary>
+    private static object? MergeDbusDataIntoNode(
+        JsonElement el,
+        Dictionary<string, DbusNodeData> nodeMap,
+        ref bool anyAdded)
+    {
+        if (el.ValueKind != JsonValueKind.Object) return null;
+
+        var dict = new Dictionary<string, object?>();
+        foreach (var prop in el.EnumerateObject())
+        {
+            // Children must be handled with an explicit loop — ref params cannot be
+            // captured by the lambda inside a LINQ .Select() call.
+            if (prop.Name == "children" && prop.Value.ValueKind == JsonValueKind.Array)
+            {
+                var kids = new List<object?>();
+                foreach (var child in prop.Value.EnumerateArray())
+                    kids.Add(MergeDbusDataIntoNode(child, nodeMap, ref anyAdded));
+                dict[prop.Name] = kids;
+            }
+            else
+            {
+                dict[prop.Name] = prop.Value.ValueKind switch
+                {
+                    JsonValueKind.String => prop.Value.GetString(),
+                    JsonValueKind.Number => prop.Value.TryGetInt32(out var i) ? (object)i : prop.Value.GetDouble(),
+                    JsonValueKind.True   => true,
+                    JsonValueKind.False  => false,
+                    JsonValueKind.Null   => null,
+                    _                   => prop.Value.ToString(),
+                };
+            }
+        }
+
+        if (dict.TryGetValue("label", out var labelObj) && labelObj is string lbl)
+        {
+            var key = NormalizeLabel(lbl);
+            if (!string.IsNullOrEmpty(key) && nodeMap.TryGetValue(key, out var nd))
+            {
+                // ── Inject icons when AT-SPI has none ────────────────────────
+                if (!dict.ContainsKey("icon-name") && nd.IconName != null)
+                    { dict["icon-name"] = nd.IconName; anyAdded = true; }
+                if (!dict.ContainsKey("icon-data") && nd.IconData != null)
+                    { dict["icon-data"] = nd.IconData; anyAdded = true; }
+
+                // ── Inject missing submenu children ──────────────────────────
+                // Qt's AT-SPI bridge only populates lazy submenus after they are
+                // opened. DBus AboutToShow triggers that population, so if the
+                // AT-SPI node has no children but DBus does, copy them here.
+                // The injected children keep their DBus integer IDs — execution
+                // falls through to GlobalMenuExporter._activeMenu.EventAsync().
+                if (!dict.ContainsKey("children") && nd.Children is { Count: > 0 } dbKids)
+                    { dict["children"] = dbKids; anyAdded = true; }
+            }
+        }
+
+        return dict;
     }
 
     // Maps normalised lower-case menu labels to FreeDesktop standard icon names.
