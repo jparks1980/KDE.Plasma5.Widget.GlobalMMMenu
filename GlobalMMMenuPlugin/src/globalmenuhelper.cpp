@@ -13,6 +13,7 @@
 #include <QQuickWindow>
 #include <QTextStream>
 #include <QVariant>
+#include <QWindow>
 
 GlobalMenuHelper::GlobalMenuHelper(QObject *parent)
     : QObject(parent)
@@ -119,14 +120,24 @@ void GlobalMenuHelper::openNativeMenu(QQuickItem *anchor, const QVariantMap &nod
         oldMenu->close();
 
     // Compute screen position from the anchor QQuickItem.
+    // QQuickItem::mapToGlobal() is the correct cross-platform way: it handles
+    // the local→scene→window→screen chain including HiDPI and Wayland offsets.
     QPoint screenPos;
     if (anchor) {
-        QQuickWindow *win = anchor->window();
-        QPointF scenePos = anchor->mapToScene(QPointF(0, 0));
-        if (win)
-            screenPos = win->mapToGlobal(scenePos.toPoint());
-        else
-            screenPos = scenePos.toPoint();
+        QPointF global = anchor->mapToGlobal(QPointF(0, 0));
+        screenPos = global.toPoint();
+    }
+
+    // ── Wayland: make QMenu a transient popup, not a top-level window ──────
+    // On Wayland, a QMenu without a transient parent is treated as an
+    // xdg_toplevel by KWin and gets a full title bar + window decorations.
+    // Calling winId() forces QWindow creation, then setTransientParent() tells
+    // the compositor this is a popup that belongs to the panel window.
+    // On X11 this sets WM_TRANSIENT_FOR which is correct and harmless.
+    if (anchor && anchor->window()) {
+        menu->winId(); // ensures windowHandle() is non-null
+        if (QWindow *menuWin = menu->windowHandle())
+            menuWin->setTransientParent(anchor->window());
     }
 
     auto *capturedMenu = menu;

@@ -57,6 +57,31 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
             var launcher = sessionConn.CreateProxy<IAtSpiLauncher>("org.a11y.Bus", new ObjectPath("/org/a11y/bus"));
             _atspiAddress = await launcher.GetAddressAsync();
 
+            // ── Ensure accessibility is enabled ──────────────────────────────
+            // Qt apps only load their AT-SPI bridge when org.a11y.Status.IsEnabled is true.
+            // On a default KDE desktop with no screen reader, this is false, so every Qt app
+            // reports "No AT-SPI connection found". Setting it to true broadcasts PropertiesChanged
+            // which causes QSpiAccessibilityBridge to activate in all running Qt/KDE apps.
+            // This is exactly what Orca (and any AT-SPI screen reader) does at startup.
+            try
+            {
+                var status = sessionConn.CreateProxy<IAtSpiStatus>("org.a11y.Bus", new ObjectPath("/org/a11y/bus"));
+                bool isEnabled = await status.GetAsync<bool>("IsEnabled");
+                if (!isEnabled)
+                {
+                    await status.SetAsync("IsEnabled", true);
+                    logger.LogInformation("[AT-SPI] IsEnabled was false — set to true. Qt apps will now load AT-SPI bridge.");
+                }
+                else
+                {
+                    logger.LogDebug("[AT-SPI] IsEnabled already true");
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogDebug("[AT-SPI] Could not set IsEnabled (non-fatal): {M}", ex.Message);
+            }
+
             // Open a raw connection to the AT-SPI socket.
             _atspiConnection = new Connection(_atspiAddress);
             await _atspiConnection.ConnectAsync();
@@ -91,20 +116,33 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
             return empty;
 
         // ── Find the AT-SPI connection whose OS PID matches ──────────────────
+        // Query all PIDs in parallel (batches of 16) to avoid O(n) sequential latency
+        // when there are many AT-SPI connections (30+ is typical on a KDE desktop).
         string? appBusName = null;
         try
         {
             var names = await _atspiBusDaemon.ListNamesAsync();
-            foreach (var name in names)
+            var uniqueNames = names.Where(n => n.StartsWith(':')).ToArray();
+
+            const int batchSize = 16;
+            for (int i = 0; i < uniqueNames.Length && appBusName == null; i += batchSize)
             {
-                if (cancellationToken.IsCancellationRequested) return empty;
-                if (!name.StartsWith(':')) continue;
-                try
+                if (cancellationToken.IsCancellationRequested) break;
+                var batch = uniqueNames.Skip(i).Take(batchSize);
+                var pidTasks = batch.Select(async name =>
                 {
-                    var connPid = await _atspiBusDaemon.GetConnectionUnixProcessIDAsync(name);
-                    if (connPid == pid) { appBusName = name; break; }
+                    try
+                    {
+                        var p = await _atspiBusDaemon.GetConnectionUnixProcessIDAsync(name);
+                        return (name, Pid: p);
+                    }
+                    catch { return (name, Pid: 0u); }
+                });
+                var results = await Task.WhenAll(pidTasks);
+                foreach (var (name, busNamePid) in results)
+                {
+                    if (busNamePid == pid && busNamePid != 0) { appBusName = name; break; }
                 }
-                catch { }
             }
         }
         catch (Exception ex)
@@ -121,6 +159,73 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
 
         var (json, idMap) = await GetMenuJsonFromConnectionAsync(appBusName, cancellationToken);
         return (json, idMap, appBusName);
+    }
+
+    // AT-SPI state constants for window-level states
+    private const uint StateActive = 1u << 1;  // ATSPI_STATE_ACTIVE (index 1) — window is in the foreground
+
+    /// <summary>
+    /// Fallback for when a window PID is unavailable: scans all AT-SPI connections for a
+    /// window whose state includes ACTIVE (currently in the foreground) and returns its menu bar.
+    /// Used when <c>GetWindowPid</c> returns 0 (e.g. XWayland apps without _NET_WM_PID,
+    /// or native Wayland apps whose KWin PID report is not yet available).
+    /// </summary>
+    public async Task<(string? Json, Dictionary<int, (string BusName, string Path)> IdMap, string? AtSpiBusName)>
+        GetMenuJsonForActiveWindowAsync(CancellationToken cancellationToken)
+    {
+        var empty = (Json: (string?)null, IdMap: new Dictionary<int, (string, string)>(), AtSpiBusName: (string?)null);
+        if (_atspiConnection == null || _atspiBusDaemon == null) return empty;
+
+        string[] names;
+        try { names = await _atspiBusDaemon.ListNamesAsync(); }
+        catch (Exception ex) { logger.LogDebug("[AT-SPI] Active scan ListNames failed: {M}", ex.Message); return empty; }
+
+        foreach (var busName in names)
+        {
+            if (cancellationToken.IsCancellationRequested) break;
+            if (!busName.StartsWith(':')) continue;
+
+            try
+            {
+                var appRoot = _atspiConnection.CreateProxy<IAtSpiAccessible>(
+                    busName, new ObjectPath("/org/a11y/atspi/accessible/root"));
+
+                // Short timeout per connection so we don't stall on unresponsive apps.
+                using var checkCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                checkCts.CancelAfter(TimeSpan.FromMilliseconds(400));
+                var windowsTask = appRoot.GetChildrenAsync();
+                await Task.WhenAny(windowsTask, Task.Delay(Timeout.Infinite, checkCts.Token));
+                if (!windowsTask.IsCompletedSuccessfully) continue;
+
+                foreach (var (winBus, winPath) in windowsTask.Result)
+                {
+                    if (cancellationToken.IsCancellationRequested) break;
+                    var winAcc = _atspiConnection.CreateProxy<IAtSpiAccessible>(winBus, winPath);
+
+                    using var stateCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    stateCts.CancelAfter(TimeSpan.FromMilliseconds(300));
+                    var stateTask = winAcc.GetStateAsync();
+                    await Task.WhenAny(stateTask, Task.Delay(Timeout.Infinite, stateCts.Token));
+                    if (!stateTask.IsCompletedSuccessfully) continue;
+
+                    var stateWords = stateTask.Result;
+                    if (stateWords.Length == 0 || (stateWords[0] & StateActive) == 0) continue;
+
+                    // This window is ACTIVE — it has foreground focus.
+                    logger.LogDebug("[AT-SPI] Active scan: ACTIVE window found on {Bus}", busName);
+                    var (json, idMap) = await GetMenuJsonFromConnectionAsync(busName, cancellationToken);
+                    if (!string.IsNullOrEmpty(json) && json != "{}")
+                    {
+                        logger.LogInformation("[AT-SPI] Active scan succeeded for {Bus} ({N} items)", busName, idMap.Count);
+                        return (json, idMap, busName);
+                    }
+                }
+            }
+            catch { /* connection not accessible or has no AT-SPI root — skip */ }
+        }
+
+        logger.LogDebug("[AT-SPI] Active scan: no ACTIVE window with menu found");
+        return empty;
     }
 
     /// <summary>

@@ -24,4 +24,14 @@ public interface IKAppMenu : IDBusObject
     Task<IDisposable> WatchMenuHiddenAsync(
         Action<(string Service, ObjectPath MenuObjectPath)> handler,
         Action<Exception>? onError = null);
+
+    /// <summary>
+    /// Tells kded5-appmenu to re-read its configuration and re-announce all
+    /// currently known window menu registrations by calling RegisterWindow on
+    /// the active com.canonical.AppMenu.Registrar. Call this after registrar
+    /// acquisition so kded5-appmenu re-registers windows that started before us.
+    /// Note: method name must start lowercase so Tmds.DBus maps it to D-Bus
+    /// method "reconfigure" (not "Reconfigure").
+    /// </summary>
+    Task reconfigureAsync();
 }

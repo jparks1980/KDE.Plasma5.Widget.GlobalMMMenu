@@ -61,7 +61,6 @@ public interface IAtSpiAction : IDBusObject
 }
 
 /// <summary>
-
 /// org.freedesktop.DBus daemon interface — separate C# type for use on the AT-SPI bus.
 /// IFreedesktopDBus is already proxied on the session bus connection in Worker; reusing
 /// it on the AT-SPI connection would cause a Tmds.DBus "Duplicate type name" collision
@@ -73,4 +72,65 @@ public interface IAtSpiDBusDaemon : IDBusObject
 {
     Task<string[]> ListNamesAsync();
     Task<uint> GetConnectionUnixProcessIDAsync(string busName);
+}
+
+/// <summary>
+/// org.a11y.atspi.Registry — the AT-SPI registry daemon.
+/// Used to register event listeners so the daemon pushes events to us
+/// instead of requiring polls.
+/// </summary>
+[DBusInterface("org.a11y.atspi.Registry")]
+public interface IAtSpiRegistry : IDBusObject
+{
+    /// <summary>
+    /// Register to receive AT-SPI events matching <paramref name="eventType"/>.
+    /// Example: "Window:Activate" or "Window:" (all window events).
+    /// </summary>
+    Task RegisterEventListenerAsync(string eventType);
+
+    /// <summary>Remove a previously registered event listener.</summary>
+    Task DeregisterEventListenerAsync(string eventType);
+}
+
+/// <summary>
+/// org.a11y.atspi.Event.Window — signal interface for AT-SPI window events.
+/// KDE/Qt emits "Activate" events when a top-level window gains focus.
+/// The signal sender's unique D-Bus bus name identifies the application.
+/// Body: (string detail, int detail2, (int,int) anyData, string srcAppName).
+/// </summary>
+[DBusInterface("org.a11y.atspi.Event.Window")]
+public interface IAtSpiWindowEvent : IDBusObject
+{
+    /// <summary>
+    /// Subscribes to the <c>Activate</c> signal emitted when a window gains focus.
+    /// The handler receives the signal body; use the connection's sender resolution
+    /// to obtain the originating unique bus name.
+    /// </summary>
+    Task<IDisposable> WatchActivateAsync(
+        Action<(string Detail, int Detail2, (int V1, int V2) AnyData, string SrcApp)> handler,
+        Action<Exception>? onError = null);
+}
+
+/// <summary>
+/// org.a11y.Status — session-bus service provided by at-spi-bus-launcher.
+/// Controls whether Qt/GTK apps load their AT-SPI accessibility bridge.
+///   IsEnabled = true  → all running apps load their AT-SPI bridge (same as Orca starting)
+///   IsEnabled = false → apps skip AT-SPI registration (default on most KDE desktops)
+/// Setting IsEnabled = true causes PropertiesChanged to broadcast to all apps, which in
+/// turn causes Qt's QSpiAccessibilityBridge to activate and register on the AT-SPI bus.
+///
+/// IMPORTANT: Tmds.DBus 0.x requires SetAsync(string, object) — non-generic — for the
+/// Properties.Set call. Using SetAsync&lt;T&gt; causes "Cannot (de)serialize Type ''" because
+/// Tmds.DBus cannot resolve the generic type parameter at runtime.
+/// </summary>
+[DBusInterface("org.a11y.Status")]
+public interface IAtSpiStatus : IDBusObject
+{
+    /// <summary>Reads a property via org.freedesktop.DBus.Properties.Get.</summary>
+    Task<T> GetAsync<T>(string prop);
+    /// <summary>
+    /// Writes a property via org.freedesktop.DBus.Properties.Set.
+    /// Must use non-generic <c>object</c> — Tmds.DBus 0.x only recognises this exact signature.
+    /// </summary>
+    Task SetAsync(string prop, object value);
 }

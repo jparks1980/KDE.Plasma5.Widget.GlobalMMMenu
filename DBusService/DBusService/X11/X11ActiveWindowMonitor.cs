@@ -4,10 +4,12 @@ using static DBusService.X11.NativeMethods;
 namespace DBusService.X11;
 
 /// <summary>
+/// X11 implementation of <see cref="IActiveWindowMonitor"/>.
 /// Monitors the X11 root window for _NET_ACTIVE_WINDOW property changes and
 /// fires <see cref="ActiveWindowChanged"/> whenever the focused window changes.
+/// Menu associations are persisted as _KDE_NET_WM_APPMENU_* atoms on each window.
 /// </summary>
-public sealed class X11ActiveWindowMonitor : IDisposable
+public sealed class X11ActiveWindowMonitor : IActiveWindowMonitor
 {
     private IntPtr _display;
     private IntPtr _root;
@@ -134,12 +136,12 @@ public sealed class X11ActiveWindowMonitor : IDisposable
     }
 
     /// <summary>Returns the window title (_NET_WM_NAME, falling back to WM_NAME), or null if neither is set.</summary>
-    internal string? GetWindowName(IntPtr window)
+    public string? GetWindowName(IntPtr window)
         => ReadStringProperty(window, _netWmNameAtom)
         ?? ReadStringProperty(window, _wmNameAtom);
 
     /// <summary>Returns the _NET_WM_PID of a window, or 0 if not set.</summary>
-    internal uint GetWindowPid(IntPtr window)
+    public uint GetWindowPid(IntPtr window)
     {
         if (XGetWindowProperty(_display, window, _netWmPidAtom,
                 0, 1, false, AnyPropertyType,
@@ -159,7 +161,7 @@ public sealed class X11ActiveWindowMonitor : IDisposable
     /// Called after successful PID-based discovery to restore props cleared by registrar restarts.
     /// Safe to call from any thread because XInitThreads() was called in Connect().
     /// </summary>
-    internal void SetWindowMenuInfo(IntPtr window, string service, string path)
+    public void SetWindowMenuInfo(IntPtr window, string service, string path)
     {
         if (_display == IntPtr.Zero) return;
         var PropModeReplace = 0;
@@ -177,7 +179,7 @@ public sealed class X11ActiveWindowMonitor : IDisposable
     /// Removes _KDE_NET_WM_APPMENU_SERVICE_NAME and _KDE_NET_WM_APPMENU_OBJECT_PATH from a window.
     /// Called when a stale path is detected so the next focus event triggers fresh discovery.
     /// </summary>
-    internal void ClearWindowMenuInfo(IntPtr window)
+    public void ClearWindowMenuInfo(IntPtr window)
     {
         if (_display == IntPtr.Zero) return;
         XDeleteProperty(_display, window, _kdeNetWmAppmenuServiceNameAtom);
@@ -190,7 +192,7 @@ public sealed class X11ActiveWindowMonitor : IDisposable
     /// from a window's X11 properties. Returns nulls if not set.
     /// Must be called from the same thread that owns _display.
     /// </summary>
-    internal (string? Service, string? Path) GetWindowMenuInfo(IntPtr window)
+    public (string? Service, string? Path) GetWindowMenuInfo(IntPtr window)
     {
         string? service = ReadStringProperty(window, _kdeNetWmAppmenuServiceNameAtom);
         string? path    = ReadStringProperty(window, _kdeNetWmAppmenuObjectPathAtom);
@@ -235,7 +237,7 @@ public sealed class X11ActiveWindowMonitor : IDisposable
     /// Returns all managed X11 windows reported by the window manager via _NET_CLIENT_LIST.
     /// Used by the background prefetch worker to discover menus for windows not yet focused.
     /// </summary>
-    internal uint[] GetAllClientWindows()
+    public uint[] GetAllClientWindows()
     {
         if (_display == IntPtr.Zero) return [];
         var atom = XInternAtom(_display, "_NET_CLIENT_LIST", false);

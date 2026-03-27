@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Threading.Channels;
 using DBusService.DBus;
+using DBusService.Wayland;
 using DBusService.X11;
 using Tmds.DBus;
 
@@ -39,7 +40,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
     {
         // ── Build-identity banner — proves which binary is running ─────────────
         // Update this string whenever you want to confirm a fresh binary is loaded.
-        logger.LogInformation("=== DBusService build: 2026-03-24-v7 (AT-SPI first + DBus icon/submenu merge) ===");
+        logger.LogInformation("=== DBusService build: 2026-03-27-v18 (cleanup + reconfigure fix) ===");
 
         using var connection = new Connection(Address.Session!);
         await connection.ConnectAsync();
@@ -52,12 +53,25 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
         // D-Bus daemon proxy — used to find a window's bus name by PID when X11 props aren't set.
         var dbus = connection.CreateProxy<IFreedesktopDBus>("org.freedesktop.DBus", "/org/freedesktop/DBus");
 
-        // ── X11 active-window monitor ─────────────────────────────────────────
-        using var x11 = new X11ActiveWindowMonitor();
-        if (!x11.Connect())
+        // ── Window monitor: detect X11 vs Wayland and create the right implementation ──
+        // Check XDG_SESSION_TYPE first (set by the display manager); fall back to
+        // checking WAYLAND_DISPLAY (set by the compositor itself).
+        var sessionType = Environment.GetEnvironmentVariable("XDG_SESSION_TYPE") ?? "";
+        var isWayland   = sessionType.Equals("wayland", StringComparison.OrdinalIgnoreCase)
+                       || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WAYLAND_DISPLAY"));
+
+        logger.LogInformation("Session type: {S} → using {M} monitor",
+            string.IsNullOrEmpty(sessionType) ? "(unknown)" : sessionType,
+            isWayland ? "Wayland/KWin" : "X11");
+
+        using IActiveWindowMonitor windowMonitor = isWayland
+            ? new WaylandWindowMonitor(connection, logger)
+            : new X11ActiveWindowMonitor();
+
+        if (!windowMonitor.Connect())
         {
             logger.LogWarning(
-                "Could not connect to X11 display — window focus monitoring is unavailable.");
+                "Could not connect to window monitor — focus tracking is unavailable.");
             await Task.Delay(Timeout.Infinite, stoppingToken).ConfigureAwait(false);
             return;
         }
@@ -66,7 +80,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
         // We watch for NameOwnerChanged so if valapanel is running at startup and we can't
         // immediately take the name, we grab it the moment valapanel exits.
         var registrarImpl = new AppMenuRegistrarImpl();
-        registrarImpl.Initialize(dbus, x11, logger);
+        registrarImpl.Initialize(dbus, windowMonitor, logger);
         await connection.RegisterObjectAsync(registrarImpl);
 
         async Task TryAcquireRegistrarAsync()
@@ -101,7 +115,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
 
         // Channel carries window ID + X11 KDE appmenu properties read at focus time.
         // The X11 event thread reads menu props directly from _KDE_NET_WM_APPMENU_SERVICE_NAME
-        // and _KDE_NET_WM_APPMENU_OBJECT_PATH — the same properties the native KDE global
+        // and _KDE_NET_WM_APPMENU_OBJECT_PATbrave://flagsH — the same properties the native KDE global
         // menu applet uses. These work for ALL windows regardless of registrar restarts.
         var channel = Channel.CreateBounded<(uint WindowId, string? Service, string? Path)>(
             new BoundedChannelOptions(1)
@@ -111,9 +125,9 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                 SingleReader = true,
             });
 
-        x11.ActiveWindowChanged += info => channel.Writer.TryWrite(info);
+        windowMonitor.ActiveWindowChanged += info => channel.Writer.TryWrite(info);
 
-        var x11Task      = Task.Run(() => x11.RunEventLoop(stoppingToken), stoppingToken);
+        var monitorTask  = Task.Run(() => windowMonitor.RunEventLoop(stoppingToken), stoppingToken);
 
         IDisposable? layoutSub   = null;
         IDisposable? propertySub = null;
@@ -134,10 +148,82 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
         atspi.RichMetadata = configuration.GetValue<bool>("GlobalMMMenu:AtSpiRichMetadata", false);
 
         var prefetchTask = prefetchEnabled
-            ? Task.Run(() => PrefetchMenusAsync(connection, dbus, x11, registrarImpl, menuCache, windowSources, atspi, stoppingToken), stoppingToken)
+            ? Task.Run(() => PrefetchMenusAsync(connection, dbus, windowMonitor, registrarImpl, menuCache, windowSources, atspi, stoppingToken), stoppingToken)
             : Task.CompletedTask;
         if (!prefetchEnabled)
             logger.LogInformation("[Prefetch] Background menu discovery disabled (EnablePrefetch=false)");
+
+        // ── Subscribe to org.kde.kappmenu.showRequest ─────────────────────────────
+        // Native Wayland KDE apps (Konsole, Dolphin, etc.) use the Wayland appmenu
+        // protocol instead of D-Bus RegisterWindow. kded5-appmenu bridges that protocol
+        // and fires showRequest with the fully-resolved service+path whenever a window
+        // with a known menu gains focus. This is the ONLY reliable path for native
+        // Wayland apps that started before our service and never called RegisterWindow.
+        //
+        // When showRequest fires we cache the result against the current active window
+        // so the normal channel loop can pick it up or display it directly if the channel
+        // has already processed the focus event without finding a menu.
+        IDisposable? kappMenuSub = null;
+        try
+        {
+            var kappmenu = connection.CreateProxy<IKAppMenu>("org.kde.kappmenu", new ObjectPath("/KAppMenu"));
+            kappMenuSub = await kappmenu.WatchShowRequestAsync(
+                args =>
+                {
+                    var svc  = args.Service;
+                    var path = args.MenuObjectPath.ToString();
+                    if (string.IsNullOrEmpty(svc) || string.IsNullOrEmpty(path) || path == "/") return;
+
+                    var activeId = windowMonitor.GetActiveWindow();
+                    if (activeId == 0) return;
+
+                    logger.LogInformation("[KAppMenu] showRequest → {S} {P} (active=0x{W:X8})", svc, path, activeId);
+
+                    // Store in window monitor / registrar so the main loop fast-paths on re-focus.
+                    windowMonitor.SetWindowMenuInfo((IntPtr)activeId, svc, path);
+                    registrarImpl.StoreResolved(activeId, svc, path);
+
+                    // If the main loop already gave up on this window (no menu found),
+                    // immediately serve the menu from kded5-appmenu's data.
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            using var ct = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                            ct.CancelAfter(TimeSpan.FromSeconds(5));
+                            var (dbJson, dbMenu) = await FetchDbusMenuJsonAsync(connection, svc, path, ct.Token);
+                            if (dbJson != null && dbMenu != null)
+                            {
+                                exporter.Update(dbJson, dbMenu);
+                                menuCache[activeId] = dbJson;
+                                windowSources[activeId] = new WindowMenuSource(MenuSourceType.DbusMenu, Service: svc, Path: path);
+                                logger.LogInformation("[KAppMenu] Served menu for 0x{W:X8} via showRequest", activeId);
+                            }
+                        }
+                        catch (Exception ex) { logger.LogDebug("[KAppMenu] showRequest fetch failed: {M}", ex.Message); }
+                    }, stoppingToken);
+                },
+                ex => logger.LogDebug("[KAppMenu] showRequest watch error: {M}", ex.Message));
+            logger.LogInformation("[KAppMenu] Subscribed to org.kde.kappmenu.showRequest");
+
+            // Trigger kded5-appmenu to re-read its state and re-call RegisterWindow
+            // for all windows it already knows about. This covers apps (Konsole, Dolphin,
+            // etc.) that started BEFORE our service and registered with the previous
+            // registrar instance — without this they would never appear in our registrar.
+            try
+            {
+                await kappmenu.reconfigureAsync();
+                logger.LogInformation("[KAppMenu] reconfigure() sent — kded5-appmenu will re-register known windows");
+            }
+            catch (Exception rex)
+            {
+                logger.LogDebug("[KAppMenu] reconfigure() failed (non-fatal): {M}", rex.Message);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug("[KAppMenu] org.kde.kappmenu not available (non-fatal): {M}", ex.Message);
+        }
 
         try
         {
@@ -152,7 +238,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                 propertySub?.Dispose(); propertySub = null;
 
                 logger.LogInformation("Active window → 0x{WindowId:X8}  [{Name}]",
-                    windowId, x11.GetWindowName((IntPtr)windowId) ?? "?");
+                    windowId, windowMonitor.GetWindowName((IntPtr)windowId) ?? "?");
                 exporter.Update("{}", null);
 
                 // Resolve service + path (priority order):
@@ -300,7 +386,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                 // the built-in FreeDesktop label-icon table as a fallback.
                 if (atspiAvailable)
                 {
-                    var atspiPid = x11.GetWindowPid((IntPtr)windowId);
+                    var atspiPid = windowMonitor.GetWindowPid((IntPtr)windowId);
                     if (atspiPid != 0)
                     {
                         using var atspiFirstCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
@@ -343,7 +429,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                                         else
                                         {
                                             (dbSvc, dbPath) = await FindMenuByPidAsync(
-                                                connection, dbus, x11, registrarImpl, bgWinId, null, bgCts.Token);
+                                                connection, dbus, windowMonitor, registrarImpl, bgWinId, null, bgCts.Token);
                                         }
 
                                         if (!string.IsNullOrEmpty(dbSvc) && !string.IsNullOrEmpty(dbPath) && dbPath != "/")
@@ -417,6 +503,108 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                         {
                             logger.LogDebug("  0x{W:X8}: AT-SPI first-try failed: {M}", windowId, ex.Message);
                         }
+
+                        // AT-SPI returned nothing — the Qt bridge may not have loaded yet
+                        // (it loads asynchronously ~1 s after RegisterEventListenerAsync).
+                        // Schedule a background retry that catches the bridge once it's up,
+                        // then pushes the menu when it appears.  Only fires once per window
+                        // (we check windowSources so a subsequent focus hit uses fast-path instead).
+                        if (!windowSources.ContainsKey(windowId))
+                        {
+                            var retryWinId = windowId;
+                            var retryPid   = atspiPid;
+                            _ = Task.Run(async () =>
+                            {
+                                // Poll up to 3 s in 500 ms steps — bridge usually loads within 1 s.
+                                for (int attempt = 0; attempt < 6; attempt++)
+                                {
+                                    try { await Task.Delay(500, stoppingToken); }
+                                    catch (OperationCanceledException) { return; }
+
+                                    // Stop if a newer focus event already resolved this window.
+                                    if (windowSources.ContainsKey(retryWinId)) return;
+
+                                    try
+                                    {
+                                        using var rCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                                        rCts.CancelAfter(TimeSpan.FromSeconds(10));
+                                        var (rJson, rMap, rBus) = await atspi.GetMenuJsonForPidAsync(retryPid, rCts.Token);
+                                        if (string.IsNullOrEmpty(rJson) || rJson == "{}") continue;
+
+                                        logger.LogInformation("  0x{W:X8}: AT-SPI bridge loaded (retry {A}) — showing menu", retryWinId, attempt + 1);
+                                        exporter.UpdateAtSpi(rJson, atspi, rMap);
+                                        menuCache[retryWinId] = rJson;
+                                        if (!string.IsNullOrEmpty(rBus))
+                                            windowSources[retryWinId] = new WindowMenuSource(MenuSourceType.AtSpi, AtSpiBusName: rBus);
+
+                                        // Enrich with shortcuts in a further background step.
+                                        using var eCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                                        eCts.CancelAfter(TimeSpan.FromSeconds(20));
+                                        var enriched = await atspi.EnrichMenuJsonAsync(rJson, rMap, eCts.Token);
+                                        if (enriched != null)
+                                        {
+                                            exporter.UpdateAtSpi(enriched, atspi, rMap);
+                                            menuCache[retryWinId] = enriched;
+                                        }
+                                        return;
+                                    }
+                                    catch (Exception ex) { logger.LogDebug("  0x{W:X8}: AT-SPI retry {A} failed: {M}", retryWinId, attempt + 1, ex.Message); }
+                                }
+                            }, stoppingToken);
+                        }
+                    }
+                    else
+                    {
+                        // PID unavailable (e.g. native Wayland or XWayland without _NET_WM_PID).
+                        // Fall back to scanning all AT-SPI connections for the window that is
+                        // currently in ACTIVE state — this finds the focused app without needing PID.
+                        logger.LogDebug("  0x{W:X8}: PID=0, trying AT-SPI active-window scan", windowId);
+                        using var activeCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                        activeCts.CancelAfter(TimeSpan.FromSeconds(10));
+                        try
+                        {
+                            var (activeJson, activeIdMap, activeBusName) =
+                                await atspi.GetMenuJsonForActiveWindowAsync(activeCts.Token);
+                            if (!string.IsNullOrEmpty(activeJson) && activeJson != "{}")
+                            {
+                                logger.LogInformation(
+                                    "  0x{W:X8}: AT-SPI active-scan menu — showing immediately",
+                                    windowId);
+                                exporter.UpdateAtSpi(activeJson, atspi, activeIdMap);
+                                menuCache[windowId] = activeJson;
+                                if (!string.IsNullOrEmpty(activeBusName))
+                                    windowSources[windowId] = new WindowMenuSource(MenuSourceType.AtSpi, AtSpiBusName: activeBusName);
+
+                                // Background DBus-icon merge (same pipeline as PID path).
+                                var bgJson2  = activeJson;
+                                var bgMap2   = activeIdMap;
+                                var bgWinId2 = windowId;
+                                _ = Task.Run(async () =>
+                                {
+                                    try
+                                    {
+                                        using var bgCts2 = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                                        bgCts2.CancelAfter(TimeSpan.FromSeconds(15));
+                                        using var eCts3 = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                                        eCts3.CancelAfter(TimeSpan.FromSeconds(20));
+                                        var enriched2 = await atspi.EnrichMenuJsonAsync(bgJson2, bgMap2, eCts3.Token);
+                                        if (enriched2 != null)
+                                        {
+                                            exporter.UpdateAtSpi(enriched2, atspi, bgMap2);
+                                            menuCache[bgWinId2] = enriched2;
+                                            logger.LogDebug("  0x{W:X8}: active-scan menu enriched with shortcuts", bgWinId2);
+                                        }
+                                    }
+                                    catch (Exception ex2) { logger.LogDebug("  0x{W:X8}: active-scan enrichment failed: {M}", bgWinId2, ex2.Message); }
+                                }, stoppingToken);
+
+                                continue;
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            logger.LogDebug("  0x{W:X8}: AT-SPI active-scan failed: {M}", windowId, ex.Message);
+                        }
                     }
                 }
 
@@ -460,13 +648,13 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                 if (string.IsNullOrEmpty(service) || string.IsNullOrEmpty(path) || path == "/")
                 {
                     var knownPath = (string.IsNullOrEmpty(path) || path == "/") ? null : path;
-                    var (ds, dp) = await FindMenuByPidAsync(connection, dbus, x11, registrarImpl, windowId, knownPath, windowCts!.Token);
+                    var (ds, dp) = await FindMenuByPidAsync(connection, dbus, windowMonitor, registrarImpl, windowId, knownPath, windowCts!.Token);
                     if (!string.IsNullOrEmpty(ds) && !string.IsNullOrEmpty(dp))
                     {
                         service = ds;
                         path    = dp;
                         // Write X11 props back so next focus resolves instantly without PID scan.
-                        x11.SetWindowMenuInfo((IntPtr)windowId, service, path);
+                        windowMonitor.SetWindowMenuInfo((IntPtr)windowId, service, path);
                         logger.LogDebug("  0x{W:X8}: menu found via PID discovery ({S}) — props restored", windowId, service);
                     }
                 }
@@ -492,7 +680,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                             if (channel.Reader.TryPeek(out _)) break;
 
                             // Re-read X11 props first (fastest path).
-                            var (ps, pp) = x11.GetWindowMenuInfo((IntPtr)windowId);
+                            var (ps, pp) = windowMonitor.GetWindowMenuInfo((IntPtr)windowId);
                             if (!string.IsNullOrEmpty(ps) && !string.IsNullOrEmpty(pp) && pp != "/")
                             {
                                 service = ps;
@@ -568,7 +756,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
 
                     // Clear stale entries so they're not reused on next focus.
                     registrarImpl.RemoveRegistration(windowId);
-                    x11.ClearWindowMenuInfo((IntPtr)windowId);
+                    windowMonitor.ClearWindowMenuInfo((IntPtr)windowId);
 
                     // Brief settle delay: Qt/Chromium apps call RegisterWindow quickly after
                     // NameOwnerChanged but the GDBus object may not be exported yet. Waiting
@@ -587,12 +775,12 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                     else
                     {
                         // Fall back to PID scan (knownPath=null → tries default format).
-                        (ns, np) = await FindMenuByPidAsync(connection, dbus, x11, registrarImpl, windowId, null, windowCts!.Token);
+                        (ns, np) = await FindMenuByPidAsync(connection, dbus, windowMonitor, registrarImpl, windowId, null, windowCts!.Token);
                     }
                     if (!string.IsNullOrEmpty(ns) && !string.IsNullOrEmpty(np))
                     {
                         logger.LogInformation("  0x{W:X8}: re-discovered menu → {S} {P}", windowId, ns, np);
-                        x11.SetWindowMenuInfo((IntPtr)windowId, ns, np);
+                        windowMonitor.SetWindowMenuInfo((IntPtr)windowId, ns, np);
                         layoutSub?.Dispose();   layoutSub   = null;
                         propertySub?.Dispose(); propertySub = null;
                         using var retryCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
@@ -626,12 +814,13 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
         }
         finally
         {
+            kappMenuSub?.Dispose();
             windowCts?.Cancel();
             windowCts?.Dispose();
             layoutSub?.Dispose();
             propertySub?.Dispose();
             channel.Writer.TryComplete();
-            await x11Task.ConfigureAwait(false);
+            await monitorTask.ConfigureAwait(false);
             await prefetchTask.ConfigureAwait(false);
         }
     }
@@ -644,7 +833,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
     private async Task PrefetchMenusAsync(
         Connection connection,
         IFreedesktopDBus dbus,
-        X11ActiveWindowMonitor x11,
+        IActiveWindowMonitor windowMonitor,
         AppMenuRegistrarImpl registrar,
         ConcurrentDictionary<uint, string> menuCache,
         ConcurrentDictionary<uint, WindowMenuSource> windowSources,
@@ -662,12 +851,12 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
             // root nodes (/MenuBar, /com/canonical/menu), and match to X11 windows
             // by PID.  This catches apps that never called RegisterWindow (e.g.
             // started before the registrar was running).
-            await ScanConnectionsForMenusAsync(connection, dbus, x11, registrar, stoppingToken);
+            await ScanConnectionsForMenusAsync(connection, dbus, windowMonitor, registrar, stoppingToken);
 
             // ── Phase 2: Window-first scan ───────────────────────────────────
             // For windows still unresolved after the connection scan, fall back to
             // the heavier PID-based probe that tries many candidate paths.
-            var windows  = x11.GetAllClientWindows();
+            var windows  = windowMonitor.GetAllClientWindows();
             int discovered = 0;
 
             foreach (var windowId in windows)
@@ -679,7 +868,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                 if (!string.IsNullOrEmpty(rs) && !string.IsNullOrEmpty(rp)) continue;
 
                 // Skip windows that already have X11 appmenu props (main loop fast-path works).
-                var (xs, xp) = x11.GetWindowMenuInfo((IntPtr)windowId);
+                var (xs, xp) = windowMonitor.GetWindowMenuInfo((IntPtr)windowId);
                 if (!string.IsNullOrEmpty(xs) && !string.IsNullOrEmpty(xp)) continue;
 
                 // Skip windows whose icon cache is already fully built — the main loop
@@ -696,13 +885,13 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                 try
                 {
                     var (service, path) = await FindMenuByPidAsync(
-                        connection, dbus, x11, registrar, windowId, null, discoveryCts.Token);
+                        connection, dbus, windowMonitor, registrar, windowId, null, discoveryCts.Token);
                     if (string.IsNullOrEmpty(service) || string.IsNullOrEmpty(path))
                         continue;
 
                     // Store DBus results so the main loop finds them on focus.
                     registrar.StoreResolved(windowId, service, path);
-                    x11.SetWindowMenuInfo((IntPtr)windowId, service, path);
+                    windowMonitor.SetWindowMenuInfo((IntPtr)windowId, service, path);
                     discovered++;
                     logger.LogInformation("[Prefetch] 0x{W:X8}: discovered {S} {P}", windowId, service, path);
 
@@ -714,7 +903,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                     warmCts.CancelAfter(TimeSpan.FromSeconds(30));
                     try
                     {
-                        var pid = x11.GetWindowPid((IntPtr)windowId);
+                        var pid = windowMonitor.GetWindowPid((IntPtr)windowId);
                         if (pid == 0) goto skipIconCache;
 
                         // Step 1: AT-SPI tree.
@@ -781,9 +970,22 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
         var inner = ex?.InnerException as DBusException;
         if (inner == null) return false;
         // UnknownObject / ServiceUnknown = path doesn't exist — not a menu error.
-        return inner.ErrorName != "org.freedesktop.DBus.Error.UnknownObject"
-            && inner.ErrorName != "org.freedesktop.DBus.Error.UnknownMethod"
-            && inner.ErrorName != "org.freedesktop.DBus.Error.ServiceUnknown";
+        if (inner.ErrorName == "org.freedesktop.DBus.Error.UnknownObject" ||
+            inner.ErrorName == "org.freedesktop.DBus.Error.ServiceUnknown")
+            return false;
+        // UnknownMethod from a path that genuinely doesn't exist (e.g. the error
+        // message says "Object does not exist at path") — treat as not found.
+        if (inner.ErrorName == "org.freedesktop.DBus.Error.UnknownMethod")
+        {
+            // If the message explicitly says the com.canonical.dbusmenu interface
+            // exists but this specific method/signature isn't present, the object IS
+            // there — just an older/different dbusmenu API version (e.g. VS Code/Electron).
+            if (inner.Message.Contains("com.canonical.dbusmenu"))
+                return true;
+            // Otherwise (e.g. "Object does not exist at path …") treat as not found.
+            return false;
+        }
+        return true;
     }
 
     /// <summary>
@@ -829,15 +1031,15 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
     private async Task ScanConnectionsForMenusAsync(
         Connection connection,
         IFreedesktopDBus dbus,
-        X11ActiveWindowMonitor x11,
+        IActiveWindowMonitor windowMonitor,
         AppMenuRegistrarImpl registrar,
         CancellationToken stoppingToken)
     {
         // Build PID → windows map once so we don't scan connections with no matching windows.
         var windowsByPid = new Dictionary<uint, List<uint>>();
-        foreach (var wid in x11.GetAllClientWindows())
+        foreach (var wid in windowMonitor.GetAllClientWindows())
         {
-            var pid = x11.GetWindowPid((IntPtr)wid);
+            var pid = windowMonitor.GetWindowPid((IntPtr)wid);
             if (pid == 0) continue;
             if (!windowsByPid.TryGetValue(pid, out var wlist))
                 windowsByPid[pid] = wlist = [];
@@ -928,7 +1130,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                 if (!string.IsNullOrEmpty(rs) && !string.IsNullOrEmpty(rp)) continue;
 
                 registrar.StoreResolved(wid, name, foundPath);
-                x11.SetWindowMenuInfo((IntPtr)wid, name, foundPath);
+                windowMonitor.SetWindowMenuInfo((IntPtr)wid, name, foundPath);
                 found++;
                 logger.LogInformation("[Scan] 0x{W:X8}: discovered via connection scan → {S} {P}", wid, name, foundPath);
             }
@@ -949,13 +1151,13 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
     private async Task<(string? Service, string? Path)> FindMenuByPidAsync(
         Connection connection,
         IFreedesktopDBus dbus,
-        X11ActiveWindowMonitor x11,
+        IActiveWindowMonitor windowMonitor,
         AppMenuRegistrarImpl registrar,
         uint windowId,
         string? knownMenuPath,
         CancellationToken cancellationToken)
     {
-        var pid = x11.GetWindowPid((IntPtr)windowId);
+        var pid = windowMonitor.GetWindowPid((IntPtr)windowId);
         if (pid == 0)
         {
             logger.LogInformation("  0x{W:X8}: PID discovery skipped — _NET_WM_PID not set on window", windowId);
@@ -975,19 +1177,32 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
             guessPaths = [knownMenuPath];
         }
 
-        bool pidFound = false;
-        foreach (var name in names)
+        // ── Parallel PID lookup ───────────────────────────────────────────────
+        // Build name→pid in batches of 20 to avoid flooding dbus-daemon while still
+        // dramatically reducing latency compared to sequential O(n) queries.
+        var uniqueNames = names.Where(n => n.StartsWith(':')).ToArray();
+        var matchingNames = new List<string>();
+        const int pidBatchSize = 20;
+        for (int i = 0; i < uniqueNames.Length; i += pidBatchSize)
         {
             if (cancellationToken.IsCancellationRequested) break;
-            if (!name.StartsWith(':')) continue;  // skip well-known names
+            var batch = uniqueNames.Skip(i).Take(pidBatchSize);
+            var pidTasks = batch.Select(async n =>
+            {
+                try   { return (n, Pid: await dbus.GetConnectionUnixProcessIDAsync(n)); }
+                catch { return (n, Pid: 0u); }
+            });
+            foreach (var (n, connPid) in await Task.WhenAll(pidTasks))
+            {
+                if (connPid == pid) matchingNames.Add(n);
+            }
+        }
 
-            uint connPid;
-            try { connPid = await dbus.GetConnectionUnixProcessIDAsync(name); }
-            catch { continue; }
+        bool pidFound = matchingNames.Count > 0;
+        foreach (var name in matchingNames)
+        {
+            if (cancellationToken.IsCancellationRequested) break;
 
-            if (connPid != pid) continue;
-
-            pidFound = true;
             logger.LogInformation("  0x{W:X8}: PID={Pid} — probing connection {N}", windowId, pid, name);
 
             // ── Build candidate list ──────────────────────────────────────────
@@ -1079,6 +1294,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                     logger.LogInformation("  0x{W:X8}: probe exception on {N} at {P}: {E}", windowId, name, candidatePath, ex.Message);
                 }
             }
+
         }
 
         if (!pidFound)

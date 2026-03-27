@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using DBusService.X11;
 using Tmds.DBus;
 
 namespace DBusService.DBus;
@@ -20,16 +19,16 @@ public sealed class AppMenuRegistrarImpl : IAppMenuRegistrarService
     private readonly ConcurrentDictionary<uint, (string? Service, string Path)> _registry = new();
 
     private IFreedesktopDBus? _dbus;
-    private X11ActiveWindowMonitor? _x11;
+    private IActiveWindowMonitor? _monitor;
     private ILogger? _logger;
 
     public ObjectPath ObjectPath => new("/com/canonical/AppMenu/Registrar");
 
-    public void Initialize(IFreedesktopDBus dbus, X11ActiveWindowMonitor x11, ILogger logger)
+    public void Initialize(IFreedesktopDBus dbus, IActiveWindowMonitor monitor, ILogger logger)
     {
-        _dbus   = dbus;
-        _x11    = x11;
-        _logger = logger;
+        _dbus    = dbus;
+        _monitor = monitor;
+        _logger  = logger;
     }
 
     // ── IAppMenuRegistrar server methods ─────────────────────────────────────

@@ -387,4 +387,6 @@ CMakeFiles/globalmenuhelper.dir/src/globalmenuhelper.cpp.o: \
  /usr/include/x86_64-linux-gnu/qt5/QtGui/qsurfaceformat.h \
  /usr/include/x86_64-linux-gnu/qt5/QtCore/QTextStream \
  /usr/include/x86_64-linux-gnu/qt5/QtCore/qtextstream.h \
- /usr/include/x86_64-linux-gnu/qt5/QtCore/QVariant
+ /usr/include/x86_64-linux-gnu/qt5/QtCore/QVariant \
+ /usr/include/x86_64-linux-gnu/qt5/QtGui/QWindow \
+ /usr/include/x86_64-linux-gnu/qt5/QtGui/qwindow.h
