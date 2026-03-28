@@ -14,9 +14,11 @@ public class GlobalMenuExporter : IGlobalMenuService
     private volatile string    _menuJson   = "{}";
     private          IDbusMenu? _activeMenu = null;
     private          AtSpiMenuReader? _atspiReader = null;
+    private          GtkMenuReader?   _gtkReader   = null;
+    private          Connection?      _sessionConn = null;
 
-    // AT-SPI items don't have integer IDs — we assign synthetic ones and map back to path.
-    // Key = synthetic int ID (>= 1), Value = (atspiBusName, objectPath)
+    // AT-SPI / GtkMenu items don't have integer IDs — we assign synthetic ones and map back to path.
+    // Key = synthetic int ID (>= 1), Value = (atspiBusName/sessionBusName, objectPath/encodedAction)
     private readonly Dictionary<int, (string BusName, string Path)> _atspiIdMap = new();
 
     public ObjectPath ObjectPath => new("/com/kde/GlobalMMMenu");
@@ -25,11 +27,20 @@ public class GlobalMenuExporter : IGlobalMenuService
 
     public async Task ExecuteItemAsync(int itemId)
     {
-        // AT-SPI items: look up the stored bus+path and call DoAction(0).
-        if (_atspiReader != null && _atspiIdMap.TryGetValue(itemId, out var entry))
+        if (_atspiIdMap.TryGetValue(itemId, out var entry))
         {
-            await _atspiReader.ExecuteItemAsync(entry.BusName, entry.Path, CancellationToken.None);
-            return;
+            // GtkMenu items: path is encoded as "{actionsBasePath}|{actionName}".
+            if (_gtkReader != null && _sessionConn != null && entry.Path.Contains('|'))
+            {
+                await _gtkReader.ExecuteItemAsync(_sessionConn, entry.BusName, entry.Path, CancellationToken.None);
+                return;
+            }
+            // AT-SPI items: look up the stored bus+path and call DoAction(0).
+            if (_atspiReader != null)
+            {
+                await _atspiReader.ExecuteItemAsync(entry.BusName, entry.Path, CancellationToken.None);
+                return;
+            }
         }
 
         // dbusmenu items: send "clicked" event.
@@ -47,7 +58,23 @@ public class GlobalMenuExporter : IGlobalMenuService
         _menuJson    = menuJson;
         _activeMenu  = menu;
         _atspiReader = null;
+        _gtkReader   = null;
+        _sessionConn = null;
         _atspiIdMap.Clear();
+    }
+
+    /// <summary>Stores a GtkMenu (org.gtk.Menus) menu for execution routing.</summary>
+    public void UpdateGtkMenu(string menuJson, GtkMenuReader reader, Connection sessionConnection,
+        Dictionary<int, (string BusName, string Path)> idMap)
+    {
+        _menuJson    = menuJson;
+        _activeMenu  = null;
+        _atspiReader = null;
+        _gtkReader   = reader;
+        _sessionConn = sessionConnection;
+        _atspiIdMap.Clear();
+        foreach (var (k, v) in idMap)
+            _atspiIdMap[k] = v;
     }
 
     /// <summary>

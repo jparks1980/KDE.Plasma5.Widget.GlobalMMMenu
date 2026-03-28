@@ -104,6 +104,47 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
     }
 
     /// <summary>
+    /// Subscribes to PropertiesChanged on the AT-SPI application node for <paramref name="atspiBusName"/>
+    /// and invokes <paramref name="onChildAdded"/> whenever ChildCount increases — i.e. whenever a new
+    /// widget (such as a lazily-realized GtkMenuBar) is added to the accessibility tree.
+    ///
+    /// This is the event-driven complement to the polling retry loop.  GTK apps (e.g. HandBrake) may
+    /// not realize their GtkMenuBar widget until well after the initial focus event; this subscription
+    /// fires immediately when the menu bar appears, regardless of how long it takes.
+    ///
+    /// The method attaches to path <c>/org/a11y/atspi/accessible/1</c> which is the application node
+    /// that is the direct parent of all top-level windows and the menu bar.
+    ///
+    /// Returns the IDisposable subscription (caller should keep it alive; dispose to unsubscribe), or
+    /// null if the AT-SPI connection is unavailable.
+    /// </summary>
+    public async Task<IDisposable?> WatchAppNodeChildrenChangedAsync(
+        string atspiBusName,
+        Action onChildAdded,
+        Action<Exception>? onError = null)
+    {
+        if (_atspiConnection == null) return null;
+        try
+        {
+            var accessible = _atspiConnection.CreateProxy<IAtSpiAccessible>(
+                atspiBusName, new ObjectPath("/org/a11y/atspi/accessible/1"));
+            return await accessible.WatchPropertiesChangedAsync(
+                changes =>
+                {
+                    // Fire only when ChildCount is in the changed set — avoids spurious triggers.
+                    if (changes.Changed.Any(kv => kv.Key == "ChildCount"))
+                        onChildAdded();
+                },
+                onError);
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug("[AT-SPI] WatchChildCount setup failed on {Bus}: {M}", atspiBusName, ex.Message);
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Builds a menu JSON string for the window belonging to the given OS process ID.
     /// Also returns an ID→(busName,path) map so the exporter can route ExecuteItem calls.
     /// Returns (null, empty) if the app has no menu bar or is not registered on AT-SPI.
@@ -245,28 +286,21 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
                 atspiBusName, new ObjectPath("/org/a11y/atspi/accessible/root"));
 
             var windows = await appRoot.GetChildrenAsync();
+            logger.LogDebug("[AT-SPI] {Bus}: root has {N} app node(s)", atspiBusName, windows.Length);
             foreach (var (winBus, winPath) in windows)
             {
                 if (cancellationToken.IsCancellationRequested) return empty;
                 var winAcc = _atspiConnection.CreateProxy<IAtSpiAccessible>(winBus, winPath);
                 var winChildren = await winAcc.GetChildrenAsync();
+                logger.LogDebug("[AT-SPI] {Bus}: app node {P} has {N} children", atspiBusName, winPath, winChildren.Length);
 
-                foreach (var (cBus, cPath) in winChildren)
-                {
-                    if (cancellationToken.IsCancellationRequested) return empty;
-                    var cAcc = _atspiConnection.CreateProxy<IAtSpiAccessible>(cBus, cPath);
-                    if (await cAcc.GetRoleAsync() != RoleMenuBar) continue;
-
-                    // Found the menu bar — build JSON + id map
-                    var idMap    = new Dictionary<int, (string BusName, string Path)>();
-                    var counter  = new IdCounter();
-                    var rootNode = await BuildMenuBarNodeAsync(cBus, cPath, idMap, counter, cancellationToken);
-                    if (rootNode == null) continue;
-
-                    var json = JsonSerializer.Serialize(rootNode, new JsonSerializerOptions { WriteIndented = true });
-                    logger.LogDebug("[AT-SPI] Built menu JSON for {Bus} ({Len} chars, {N} items)", atspiBusName, json.Length, idMap.Count);
-                    return (json, idMap);
-                }
+                // Search up to 2 levels deep for the menu bar.
+                // Qt apps place it as a direct child of the window, but GTK apps
+                // (e.g. HandBrake) may nest it inside an intermediate container.
+                var result = await FindMenuBarInChildrenAsync(
+                    atspiBusName, winChildren, depth: 0, cancellationToken);
+                if (result != null) return result.Value;
+                logger.LogDebug("[AT-SPI] {Bus}: no menu bar found in {P}'s {N} children", atspiBusName, winPath, winChildren.Length);
             }
         }
         catch (Exception ex)
@@ -275,6 +309,62 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
         }
         return empty;
     }
+
+    /// <summary>
+    /// Recursively searches children for a ROLE_MENU_BAR node, up to maxDepth=1 extra level
+    /// below the window frame (so total depth from window = 2 levels).
+    /// </summary>
+    private async Task<(string? Json, Dictionary<int, (string BusName, string Path)> IdMap)?>
+        FindMenuBarInChildrenAsync(
+            string atspiBusName,
+            (string Bus, ObjectPath Path)[] children,
+            int depth,
+            CancellationToken cancellationToken)
+    {
+        const int MaxExtraDepth = 1; // 0 = direct window children, 1 = one level into containers
+        foreach (var (cBus, cPath) in children)
+        {
+            if (cancellationToken.IsCancellationRequested) return null;
+            var cAcc = _atspiConnection!.CreateProxy<IAtSpiAccessible>(cBus, cPath);
+            uint role;
+            try { role = await cAcc.GetRoleAsync(); }
+            catch { continue; }
+
+            if (role == RoleMenuBar)
+            {
+                var idMap   = new Dictionary<int, (string BusName, string Path)>();
+                var counter = new IdCounter();
+                var rootNode = await BuildMenuBarNodeAsync(cBus, cPath, idMap, counter, cancellationToken);
+                if (rootNode == null) continue;
+
+                var json = JsonSerializer.Serialize(rootNode, new JsonSerializerOptions { WriteIndented = true });
+                logger.LogDebug("[AT-SPI] Built menu JSON for {Bus} ({Len} chars, {N} items)", atspiBusName, json.Length, idMap.Count);
+                return (json, idMap);
+            }
+
+            // Recurse into container-like nodes only (panel/filler/frame/window)
+            // to avoid scanning deeply into the full widget tree.
+            if (depth < MaxExtraDepth && IsContainerRole(role))
+            {
+                try
+                {
+                    var grandchildren = await cAcc.GetChildrenAsync();
+                    var found = await FindMenuBarInChildrenAsync(
+                        atspiBusName, grandchildren, depth + 1, cancellationToken);
+                    if (found != null) return found;
+                }
+                catch { /* container not accessible — skip */ }
+            }
+        }
+        return null;
+    }
+
+    /// <summary>Returns true for AT-SPI roles that can contain a menu bar as a child.</summary>
+    private static bool IsContainerRole(uint role) =>
+        role is 39  // FILLER / PANEL
+             or 20  // FRAME (nested window-in-window or GtkBox top frame)
+             or 29  // GLASS_PANE
+             or 14; // DESKTOP_FRAME
 
     /// <summary>
     /// Executes the menu item at the given AT-SPI object path (calls DoAction(0)).

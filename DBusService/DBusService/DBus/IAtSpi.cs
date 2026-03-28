@@ -41,6 +41,17 @@ public interface IAtSpiAccessible : IDBusObject
     /// Usage: await acc.GetAsync&lt;string&gt;("Name")
     /// </summary>
     Task<T> GetAsync<T>(string prop);
+
+    /// <summary>
+    /// Subscribes to the org.freedesktop.DBus.Properties.PropertiesChanged signal for this object.
+    /// Tmds.DBus 0.x recognises this method name as a special case and generates the subscription
+    /// inline — no separate [DBusInterface("org.freedesktop.DBus.Properties")] type is needed,
+    /// so there is no risk of a ModuleBuilder duplicate-type collision.
+    /// Fired when properties like ChildCount are updated (e.g. when a GTK app adds a menu bar).
+    /// </summary>
+    Task<IDisposable> WatchPropertiesChangedAsync(
+        Action<PropertyChanges> handler,
+        Action<Exception>? onError = null);
 }
 
 /// <summary>
@@ -109,6 +120,58 @@ public interface IAtSpiWindowEvent : IDBusObject
     Task<IDisposable> WatchActivateAsync(
         Action<(string Detail, int Detail2, (int V1, int V2) AnyData, string SrcApp)> handler,
         Action<Exception>? onError = null);
+}
+
+/// <summary>
+/// org.gtk.Menus — GMenuModel D-Bus transport interface exported by GTK3/4 GtkApplication windows.
+///
+/// GTK3 apps (e.g. HandBrake) that use GtkApplication.set_menubar() export their menu bar here
+/// when a com.canonical.AppMenu.Registrar is present on the session bus.  The app hides the in-app
+/// GtkMenuBar and makes the model available for the global menu to consume.
+///
+/// The protocol uses a subscription/section model:
+///   • Subscription IDs identify logical menu trees (root = 0, each submenu = its own ID).
+///   • Start([id, ...]) subscribes to those IDs and returns the current items as sections.
+///   • Each section is (subscription_id, section_index, [{item dict}, ...]).
+///   • Item dictionaries contain "label", ":submenu" (uu), ":section" (uu), "action", "accel", etc.
+///   • End([id, ...]) unsubscribes when no longer needed.
+/// </summary>
+[DBusInterface("org.gtk.Menus")]
+public interface IGtkMenus : IDBusObject
+{
+    /// <summary>
+    /// Subscribe to the given subscription IDs and return their current section contents.
+    /// Pass [0] to read the root menu bar.  Each ":submenu" item in the returned data will
+    /// reference a new subscription ID; call Start again with those IDs to walk the tree.
+    /// Returns a(uuaa{sv}) — array of (subscription_id, section_index, item_array).
+    /// </summary>
+    Task<(uint SubId, uint Section, IDictionary<string, object>[] Items)[]> StartAsync(uint[] subscriptionIds);
+
+    /// <summary>Unsubscribes from the given subscription IDs and releases server-side resources.</summary>
+    Task EndAsync(uint[] subscriptionIds);
+
+    /// <summary>Fired when any subscribed section changes.</summary>
+    Task<IDisposable> WatchChangedAsync(Action handler, Action<Exception>? onError = null);
+}
+
+/// <summary>
+/// org.gtk.Actions — GAction dispatch interface exported alongside org.gtk.Menus.
+/// Used to activate menu items by their action name.
+///
+/// The "action" field in GMenuModel items is a prefixed action name:
+///   "app.<name>"    → activate on the GtkApplication (this D-Bus path)
+///   "win.<name>"    → activate on the active GtkApplicationWindow
+///   "unity.<name>"  → activate on the appmenu-gtk-module Unity action group
+/// </summary>
+[DBusInterface("org.gtk.Actions")]
+public interface IGtkActions : IDBusObject
+{
+    /// <summary>
+    /// Activates action <paramref name="actionName"/> with optional typed target
+    /// and platform hint dictionary.  Pass empty arrays for both to activate a
+    /// parameterless action.
+    /// </summary>
+    Task ActivateAsync(string actionName, object[] targetValue, IDictionary<string, object> platformData);
 }
 
 /// <summary>

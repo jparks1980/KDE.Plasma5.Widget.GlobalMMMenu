@@ -45,6 +45,14 @@ IActiveWindowMonitor (C#)
               Fallback for non-KDE apps (e.g. Electron, GTK2).
               Not used for native KDE/Qt apps on Wayland — they export
               menus directly via dbusmenu once MenuBar is enabled.
+
+        └─ 6. org.gtk.Menus (GMenuModel) ─────────────────────────────────
+              For native Wayland GTK3/4 apps (HandBrake, etc.) that hide
+              their GtkMenuBar when AppMenu.Registrar is present and
+              instead export menus via the GLib GMenuModel D-Bus protocol.
+              Discovered via the app's GtkApplication well-known bus name
+              (e.g. fr.handbrake.ghb → /fr/handbrake/ghb/menus/menubar)
+              or by recursive introspection of the app's D-Bus tree.
         │
         ▼
   Menu JSON (dbusmenu or AT-SPI tree)
@@ -76,7 +84,9 @@ Plasma panel widget (QML)  shows menu buttons, calls openNativeMenu()
 - .NET 10 runtime (`dotnet-runtime-10`)
 - Qt5 (`libqt5qml5`, `libqt5widgets5`)
 - `kded5` with the `appmenu` module (standard in KDE Plasma 5)
-- `appmenu-gtk3-module` — for GTK app menus (Firefox, Thunderbird, etc.)
+- `appmenu-gtk3-module` — for GTK app menus on X11 (Firefox, Thunderbird, etc.)
+  > **Note:** On native Wayland, GTK3/4 apps (e.g. HandBrake) use the `org.gtk.Menus`
+  > GMenuModel protocol instead. This is handled automatically without any extra module.
 - `appmenu-registrar` — GTK app menu registration daemon
 
 ### Build
@@ -195,6 +205,7 @@ DBusService/
     Worker.cs               X11 monitor + menu fetcher + window source cache
     GlobalMenuExporter.cs   Exposes com.kde.GlobalMMMenu on the session bus
     AtSpiMenuReader.cs      AT-SPI fallback: reads menus for any Qt/KDE app
+    GtkMenuReader.cs        GTK3/4 native Wayland: reads org.gtk.Menus (GMenuModel)
     X11/
       X11ActiveWindowMonitor.cs   X11 event loop + window property reader
       NativeMethods.cs            libX11 P/Invoke bindings
@@ -226,6 +237,16 @@ Qt/KDE apps register via `com.canonical.AppMenu.Registrar`. On **Wayland**, apps
 
 ### 4. PID-based DBus probe
 Used when no registrar or property data is available. Enumerates all D-Bus connections belonging to the window's PID, introspects `/com/canonical/menu` for Chromium-style apps, and probes `/MenuBar/N` for KDE/Qt `KMainWindow` apps.
+
+### 5. org.gtk.Menus (GMenuModel) — native Wayland GTK3/4
+When a GTK3/4 app running natively on Wayland detects `com.canonical.AppMenu.Registrar`, it hides its in-app `GtkMenuBar` and exports the same menu via the `org.gtk.Menus` GLib GMenuModel D-Bus protocol. KDE's `appmenu-gtk3-module` (which bridges this on X11 via the constant path `/org/appmenu/gtk/window/menus/menubar`) is not installed on most Wayland-only systems.
+
+The service discovers these menus by:
+1. Checking which D-Bus well-known name the app owns (e.g. `fr.handbrake.ghb`)
+2. Deriving the path: `fr.handbrake.ghb` → `/fr/handbrake/ghb/menus/menubar`
+3. Falling back to recursive D-Bus introspection of the app's connection tree
+
+The full menu tree is fetched recursively via `org.gtk.Menus.Start()` subscription IDs, converted to dbusmenu-compatible JSON, and served to the panel widget.
 
 ---
 
@@ -263,11 +284,12 @@ On Wayland, KDE/Qt apps export their menus via the **Wayland `appmenu-v1` protoc
    ```
 
 ---
-- **appmenu-registrar** must be installed for GTK app menus (Firefox, LibreOffice, Thunderbird): `sudo apt install appmenu-registrar`
-- For GTK apps, `appmenu-gtk3-module` must be loaded. Add to `/etc/environment`:
+- **appmenu-registrar** must be installed for GTK app menus on X11 (Firefox, LibreOffice, Thunderbird): `sudo apt install appmenu-registrar`
+- For GTK apps on **X11**, `appmenu-gtk3-module` must be loaded. Add to `/etc/environment`:
   ```
   GTK_MODULES=appmenu-gtk-module
   ```
+  > **Wayland note:** GTK3/4 apps running natively on Wayland (e.g. HandBrake/ghb) do **not** require `appmenu-gtk3-module`. The service reads their menus directly via the `org.gtk.Menus` GMenuModel protocol.
 - After installation, a **plasmashell restart** is required if the widget was already on the panel: `plasmashell --replace &`
 - The `appsettings.json` config file **must** be present in the same directory as the binary (`/usr/local/bin/`). The install script handles this automatically; if deploying manually, copy it alongside the binary.
 

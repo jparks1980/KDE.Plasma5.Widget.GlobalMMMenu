@@ -26,7 +26,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
 
     // Tracks which discovery method successfully served a menu for each X11 window.
     // Used to skip the full registrar/X11/PID/poll cycle on subsequent focus events.
-    private enum MenuSourceType { DbusMenu, AtSpi }
+    private enum MenuSourceType { DbusMenu, AtSpi, GtkMenu }
     private sealed record WindowMenuSource(
         MenuSourceType Type,
         string? Service      = null,   // DBus service name (DbusMenu fast path)
@@ -40,7 +40,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
     {
         // ── Build-identity banner — proves which binary is running ─────────────
         // Update this string whenever you want to confirm a fresh binary is loaded.
-        logger.LogInformation("=== DBusService build: 2026-03-27-v18 (cleanup + reconfigure fix) ===");
+        logger.LogInformation("=== DBusService build: 2026-03-28-v24g (GtkMenu: recursive introspect discovery depth-3) ===");
 
         using var connection = new Connection(Address.Session!);
         await connection.ConnectAsync();
@@ -146,6 +146,12 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
         await using var atspi = new AtSpiMenuReader(logger);
         var atspiAvailable = await atspi.ConnectAsync();
         atspi.RichMetadata = configuration.GetValue<bool>("GlobalMMMenu:AtSpiRichMetadata", false);
+
+        // GtkMenu reader — for GTK3/4 native Wayland apps that export org.gtk.Menus.
+        // When com.canonical.AppMenu.Registrar is acquired, GTK3 hides its in-app GtkMenuBar
+        // and exports the menu model at well-known paths on its session-bus D-Bus connection.
+        // AT-SPI sees one fewer child (menu bar hidden), but org.gtk.Menus is always accessible.
+        var gtkMenuReader = new GtkMenuReader(logger);
 
         var prefetchTask = prefetchEnabled
             ? Task.Run(() => PrefetchMenusAsync(connection, dbus, windowMonitor, registrarImpl, menuCache, windowSources, atspi, stoppingToken), stoppingToken)
@@ -376,6 +382,33 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                         path    = knownSrc.Path!;
                         logger.LogInformation("  0x{W:X8}: fast-path DBus (cached {S})", windowId, service);
                     }
+                    else if (knownSrc.Type == MenuSourceType.GtkMenu)
+                    {
+                        // GTK3/4 org.gtk.Menus — re-read each time (GMenuModel is live).
+                        var gtkBus = knownSrc.AtSpiBusName ?? string.Empty;
+                        if (!string.IsNullOrEmpty(gtkBus) && menuCache.TryGetValue(windowId, out var cachedGtk))
+                        {
+                            // Re-serve cached JSON instantly then re-read in background for changes.
+                            // Re-use the existing gtkMenuReader instance (no state).
+                            var pid2 = windowMonitor.GetWindowPid((IntPtr)windowId);
+                            if (pid2 != 0)
+                            {
+                                using var stCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                                stCts.CancelAfter(TimeSpan.FromSeconds(5));
+                                var (freshGtkJson, freshGtkIdMap, _) = await gtkMenuReader.GetMenuJsonForConnectionAsync(
+                                    connection, dbus, pid2, stCts.Token);
+                                if (!string.IsNullOrEmpty(freshGtkJson) && freshGtkJson != "{}")
+                                {
+                                    exporter.UpdateGtkMenu(freshGtkJson, gtkMenuReader, connection, freshGtkIdMap);
+                                    menuCache[windowId] = freshGtkJson;
+                                    logger.LogInformation("  0x{W:X8}: fast-path GtkMenu (refreshed)", windowId);
+                                    continue;
+                                }
+                            }
+                            // Stale — discard and fall through to full discovery.
+                            windowSources.TryRemove(windowId, out _);
+                        }
+                    }
                 }
 
                 // ── AT-SPI first: show menu structure immediately ────────────────────────────
@@ -391,10 +424,12 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                     {
                         using var atspiFirstCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
                         atspiFirstCts.CancelAfter(TimeSpan.FromSeconds(15));
+                        string? firstScanBusName = null; // captured even when scan returns no menu
                         try
                         {
                             var (atspiJson, atspiIdMap, atspiBusName) =
                                 await atspi.GetMenuJsonForPidAsync(atspiPid, atspiFirstCts.Token);
+                            firstScanBusName = atspiBusName; // keep for event-driven retry below
                             if (!string.IsNullOrEmpty(atspiJson) && atspiJson != "{}")
                             {
                                 logger.LogInformation(
@@ -504,34 +539,72 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                             logger.LogDebug("  0x{W:X8}: AT-SPI first-try failed: {M}", windowId, ex.Message);
                         }
 
-                        // AT-SPI returned nothing — the Qt bridge may not have loaded yet
-                        // (it loads asynchronously ~1 s after RegisterEventListenerAsync).
-                        // Schedule a background retry that catches the bridge once it's up,
-                        // then pushes the menu when it appears.  Only fires once per window
-                        // (we check windowSources so a subsequent focus hit uses fast-path instead).
+                        // ── org.gtk.Menus fallback for native Wayland GTK3/4 apps ─────────────────
+                        // GTK3 hides the in-app GtkMenuBar (making AT-SPI see 1 fewer child) but
+                        // exports the same menu via org.gtk.Menus on the session bus.
+                        // Run in background — MUST NOT block the main event loop.
                         if (!windowSources.ContainsKey(windowId))
                         {
-                            var retryWinId = windowId;
-                            var retryPid   = atspiPid;
+                            var gtkWinId = windowId;
+                            var gtkPid   = atspiPid;
                             _ = Task.Run(async () =>
                             {
-                                // Poll up to 3 s in 500 ms steps — bridge usually loads within 1 s.
-                                for (int attempt = 0; attempt < 6; attempt++)
+                                logger.LogDebug("  0x{W:X8}: probing org.gtk.Menus in background (pid={P})", gtkWinId, gtkPid);
+                                try
                                 {
-                                    try { await Task.Delay(500, stoppingToken); }
+                                    using var gtkCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                                    gtkCts.CancelAfter(TimeSpan.FromSeconds(5));
+                                    var (gtkJson, gtkIdMap, gtkBus) = await gtkMenuReader.GetMenuJsonForConnectionAsync(
+                                        connection, dbus, gtkPid, gtkCts.Token);
+                                    if (string.IsNullOrEmpty(gtkJson) || gtkJson == "{}") return;
+                                    if (windowSources.ContainsKey(gtkWinId)) return;
+                                    logger.LogInformation("  0x{W:X8}: org.gtk.Menus menu (pid={P}) — showing", gtkWinId, gtkPid);
+                                    exporter.UpdateGtkMenu(gtkJson, gtkMenuReader, connection, gtkIdMap);
+                                    menuCache[gtkWinId] = gtkJson;
+                                    if (!string.IsNullOrEmpty(gtkBus))
+                                        windowSources[gtkWinId] = new WindowMenuSource(MenuSourceType.GtkMenu, AtSpiBusName: gtkBus);
+                                }
+                                catch (Exception gtkEx)
+                                {
+                                    logger.LogDebug("  0x{W:X8}: org.gtk.Menus probe failed: {M}", gtkWinId, gtkEx.Message);
+                                }
+                            }, stoppingToken);
+                        }
+                        // Qt apps: bridge loads ~1 s after service start.
+                        // GTK apps (e.g. HandBrake): the GtkMenuBar widget may take several seconds
+                        // to appear in the AT-SPI tree after GTK lazy-realizes it.
+                        // Poll for up to 30 s in increasing intervals — covers both cases without
+                        // flooding the bus on apps that genuinely have no menu.
+                        // Only fires once per window (windowSources check avoids duplicate retries).
+                        if (!windowSources.ContainsKey(windowId))
+                        {
+                            var retryWinId  = windowId;
+                            var retryPid    = atspiPid;
+                            var retryBusName = firstScanBusName; // may be null if first scan threw
+                            logger.LogDebug("  0x{W:X8}: scheduling AT-SPI retry task (pid={P})", windowId, atspiPid);
+                            _ = Task.Run(async () =>
+                            {
+                                // Delays: 500ms × 6, then 2s × 12 = 3s + 24s = 27s total, ~18 probes.
+                                var delays = Enumerable.Repeat(500, 6).Concat(Enumerable.Repeat(2000, 12));
+                                int attempt = 0;
+                                foreach (var delayMs in delays)
+                                {
+                                    attempt++;
+                                    try { await Task.Delay(delayMs, stoppingToken); }
                                     catch (OperationCanceledException) { return; }
 
                                     // Stop if a newer focus event already resolved this window.
                                     if (windowSources.ContainsKey(retryWinId)) return;
 
+                                    logger.LogDebug("  0x{W:X8}: AT-SPI retry #{A} (pid={P})", retryWinId, attempt, retryPid);
                                     try
                                     {
                                         using var rCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
                                         rCts.CancelAfter(TimeSpan.FromSeconds(10));
                                         var (rJson, rMap, rBus) = await atspi.GetMenuJsonForPidAsync(retryPid, rCts.Token);
-                                        if (string.IsNullOrEmpty(rJson) || rJson == "{}") continue;
+                                        if (string.IsNullOrEmpty(rJson) || rJson == "{}") { logger.LogDebug("  0x{W:X8}: retry #{A} — still no menu", retryWinId, attempt); continue; }
 
-                                        logger.LogInformation("  0x{W:X8}: AT-SPI bridge loaded (retry {A}) — showing menu", retryWinId, attempt + 1);
+                                        logger.LogInformation("  0x{W:X8}: AT-SPI widget appeared (retry {A}) — showing menu", retryWinId, attempt);
                                         exporter.UpdateAtSpi(rJson, atspi, rMap);
                                         menuCache[retryWinId] = rJson;
                                         if (!string.IsNullOrEmpty(rBus))
@@ -548,7 +621,48 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                                         }
                                         return;
                                     }
-                                    catch (Exception ex) { logger.LogDebug("  0x{W:X8}: AT-SPI retry {A} failed: {M}", retryWinId, attempt + 1, ex.Message); }
+                                    catch (Exception ex) { logger.LogDebug("  0x{W:X8}: AT-SPI retry #{A} exception: {M}", retryWinId, attempt, ex.Message); }
+                                }
+                                logger.LogDebug("  0x{W:X8}: AT-SPI retry exhausted after {A} attempts — no menu found", retryWinId, attempt);
+
+                                // ── Event-driven fallback: subscribe to AT-SPI PropertiesChanged ──────────
+                                // GTK apps (e.g. HandBrake) may realize their GtkMenuBar widget lazily —
+                                // well after the 27 s polling window above.  WatchAppNodeChildrenChangedAsync
+                                // fires the INSTANT ChildCount increases on the application node, so we
+                                // catch the menu bar appearing regardless of timing.
+                                if (retryBusName != null && !windowSources.ContainsKey(retryWinId))
+                                {
+                                    logger.LogDebug("  0x{W:X8}: subscribing to AT-SPI ChildCount watcher on {Bus}", retryWinId, retryBusName);
+                                    try
+                                    {
+                                        await atspi.WatchAppNodeChildrenChangedAsync(
+                                            retryBusName,
+                                            () => _ = Task.Run(async () =>
+                                            {
+                                                if (windowSources.ContainsKey(retryWinId)) return;
+                                                logger.LogInformation("  0x{W:X8}: AT-SPI ChildCount changed — scanning after lazy realization", retryWinId);
+                                                try
+                                                {
+                                                    using var wCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                                                    wCts.CancelAfter(TimeSpan.FromSeconds(10));
+                                                    var (wJson, wMap, wBus) = await atspi.GetMenuJsonForPidAsync(retryPid, wCts.Token);
+                                                    if (string.IsNullOrEmpty(wJson) || wJson == "{}") { logger.LogDebug("  0x{W:X8}: ChildCount event — scan still no menu", retryWinId); return; }
+                                                    logger.LogInformation("  0x{W:X8}: AT-SPI lazy menu appeared (event-driven) — showing menu", retryWinId);
+                                                    exporter.UpdateAtSpi(wJson, atspi, wMap);
+                                                    menuCache[retryWinId] = wJson;
+                                                    if (!string.IsNullOrEmpty(wBus))
+                                                        windowSources[retryWinId] = new WindowMenuSource(MenuSourceType.AtSpi, AtSpiBusName: wBus);
+                                                    // Enrich with shortcuts in a further background step.
+                                                    using var weCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                                                    weCts.CancelAfter(TimeSpan.FromSeconds(20));
+                                                    var wEnriched = await atspi.EnrichMenuJsonAsync(wJson, wMap, weCts.Token);
+                                                    if (wEnriched != null) { exporter.UpdateAtSpi(wEnriched, atspi, wMap); menuCache[retryWinId] = wEnriched; }
+                                                }
+                                                catch (Exception wEx) { logger.LogDebug("  0x{W:X8}: ChildCount event scan failed: {M}", retryWinId, wEx.Message); }
+                                            }, stoppingToken),
+                                            ex => logger.LogDebug("  0x{W:X8}: ChildCount watcher error: {M}", retryWinId, ex.Message));
+                                    }
+                                    catch (Exception wex) { logger.LogDebug("  0x{W:X8}: ChildCount watcher setup failed: {M}", retryWinId, wex.Message); }
                                 }
                             }, stoppingToken);
                         }
@@ -1301,6 +1415,68 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
             logger.LogInformation("  0x{W:X8}: PID discovery — no D-Bus connection found for pid={Pid}", windowId, pid);
         else
             logger.LogInformation("  0x{W:X8}: PID discovery — connections found for pid={Pid} but no menu path responded", windowId, pid);
+
+        // ── GMenuProxy fallback (GTK apps using GMenuModel on Wayland) ───────────
+        // GTK3/4 apps using GMenuModel export menus via org.gtk.Menus — a different
+        // protocol than com.canonical.dbusmenu.  KDE's gmenudbusmenuproxy bridges
+        // them: it creates a dbusmenu proxy at /MenuBar/N on its own service and
+        // calls RegisterWindow(kwinInternalId, "/MenuBar/N").
+        //
+        // KWin assigns sequential integers (1, 2, 3…) to windows internally; these
+        // are much smaller than our synthetic 0x80000000|pid IDs and never collide
+        // with X11 window IDs.  So TryGetMenu(ourSyntheticId) never finds the entry.
+        //
+        // On X11 the appmenu-gtk-module writes _KDE_NET_WM_APPMENU_* atoms directly
+        // on each window — the X11 monitor reads these at focus time, bypassing the
+        // registrar entirely.  That is why the same GTK app works on X11 but not
+        // Wayland without this fallback.
+        //
+        // When probing found the app's own bus connections but found no dbusmenu there,
+        // check if gmenudbusmenuproxy registered a small-ID entry we can use.
+        if (pidFound && names.Contains("org.kde.plasma.gmenu_dbusmenu_proxy"))
+        {
+            // Collect paths gmenudbusmenuproxy registered under small KWin internal IDs.
+            // Filter for window IDs that could not possibly be our synthetic 0x80000000|pid
+            // values or real X11 IDs (which are typically in the same range).
+            const uint kwinIdMax = 0x00010000u;
+            var gmenuCandidates = registrar.GetAllRegistrations()
+                .Where(r => r.WindowId > 0 && r.WindowId < kwinIdMax)
+                .Select(r => r.Path)
+                .Distinct()
+                .ToArray();
+
+            // Also try sequential /MenuBar/N guesses if nothing was found in the registrar
+            // (e.g. gmenudbusmenuproxy registered before our service started).
+            if (gmenuCandidates.Length == 0)
+                gmenuCandidates = Enumerable.Range(1, 10).Select(n => $"/MenuBar/{n}").ToArray();
+
+            logger.LogInformation(
+                "  0x{W:X8}: GMenuProxy fallback — probing {C} path(s) on gmenudbusmenuproxy",
+                windowId, gmenuCandidates.Length);
+
+            foreach (var gPath in gmenuCandidates)
+            {
+                try
+                {
+                    var gProxy = connection.CreateProxy<IDbusMenu>(
+                        "org.kde.plasma.gmenu_dbusmenu_proxy", new ObjectPath(gPath));
+                    using var gCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    gCts.CancelAfter(TimeSpan.FromMilliseconds(1500));
+                    var gTask = gProxy.AboutToShowAsync(0);
+                    await Task.WhenAny(gTask, Task.Delay(Timeout.Infinite, gCts.Token));
+                    if (gTask.IsCompletedSuccessfully || (gTask.IsFaulted && IsKnownMenuError(gTask.Exception)))
+                    {
+                        logger.LogInformation(
+                            "  0x{W:X8}: GMenuProxy menu found at gmenudbusmenuproxy:{P}", windowId, gPath);
+                        registrar.StoreResolved(windowId, "org.kde.plasma.gmenu_dbusmenu_proxy", gPath);
+                        return ("org.kde.plasma.gmenu_dbusmenu_proxy", gPath);
+                    }
+                }
+                catch { /* path not present on gmenudbusmenuproxy */ }
+            }
+
+            logger.LogDebug("  0x{W:X8}: GMenuProxy fallback — no responding path found", windowId);
+        }
 
         return (null, null);
     }
