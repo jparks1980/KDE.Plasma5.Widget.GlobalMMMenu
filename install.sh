@@ -182,7 +182,7 @@ do_uninstall() {
     systemctl --user daemon-reload
 
     # Remove service binary
-    [[ -f "$SERVICE_BIN" ]] && sudo rm "$SERVICE_BIN" && success "Removed $SERVICE_BIN"
+    [[ -f "$SERVICE_BIN" ]] && sudo rDBusSerm "$SERVICE_BIN" && success "Removed $SERVICE_BIN"
 
     # Remove plasmoid
     local plasmoid_dest="$HOME/.local/share/plasma/plasmoids/$PLASMOID_ID"

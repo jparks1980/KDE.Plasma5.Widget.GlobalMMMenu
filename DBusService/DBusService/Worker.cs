@@ -40,7 +40,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
     {
         // ── Build-identity banner — proves which binary is running ─────────────
         // Update this string whenever you want to confirm a fresh binary is loaded.
-        logger.LogInformation("=== DBusService build: 2026-03-28-v24g (GtkMenu: recursive introspect discovery depth-3) ===");
+        logger.LogInformation("=== DBusService build: 2026-04-03-v25a (retry loop: DBus registrar check for Chromium/Brave late RegisterWindow) ===");
 
         using var connection = new Connection(Address.Session!);
         await connection.ConnectAsync();
@@ -602,7 +602,45 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                                         using var rCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
                                         rCts.CancelAfter(TimeSpan.FromSeconds(10));
                                         var (rJson, rMap, rBus) = await atspi.GetMenuJsonForPidAsync(retryPid, rCts.Token);
-                                        if (string.IsNullOrEmpty(rJson) || rJson == "{}") { logger.LogDebug("  0x{W:X8}: retry #{A} — still no menu", retryWinId, attempt); continue; }
+                                        if (string.IsNullOrEmpty(rJson) || rJson == "{}")
+                                        {
+                                            // AT-SPI returned nothing — also check the DBus registrar.
+                                            // Chromium/Brave calls RegisterWindow several seconds after their
+                                            // window gets focus; by the time we reach this retry loop the app
+                                            // may have finally registered.  Check the direct registry first
+                                            // (fast), then fall back to a full PID scan every 3rd attempt
+                                            // to handle the common case where Chromium's Qt-internal winId
+                                            // doesn't match the X11 frame window ID we track.
+                                            var (retrySvc, retryPath) = registrarImpl.TryGetMenu(retryWinId);
+                                            if (string.IsNullOrEmpty(retrySvc) && attempt % 3 == 0)
+                                            {
+                                                using var dbsCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                                                dbsCts.CancelAfter(TimeSpan.FromSeconds(8));
+                                                (retrySvc, retryPath) = await FindMenuByPidAsync(
+                                                    connection, dbus, windowMonitor, registrarImpl,
+                                                    retryWinId, null, dbsCts.Token);
+                                            }
+
+                                            if (!string.IsNullOrEmpty(retrySvc) && !string.IsNullOrEmpty(retryPath) && retryPath != "/")
+                                            {
+                                                logger.LogInformation("  0x{W:X8}: DBus registrar entry found on retry #{A} — fetching ({S})", retryWinId, attempt, retrySvc);
+                                                using var fetchCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                                                fetchCts.CancelAfter(TimeSpan.FromSeconds(10));
+                                                var (dbJson, dbMenu) = await FetchDbusMenuJsonAsync(connection, retrySvc, retryPath, fetchCts.Token);
+                                                if (dbJson != null && dbMenu != null)
+                                                {
+                                                    exporter.Update(dbJson, dbMenu);
+                                                    menuCache[retryWinId] = dbJson;
+                                                    windowSources[retryWinId] = new WindowMenuSource(MenuSourceType.DbusMenu, Service: retrySvc, Path: retryPath);
+                                                    windowMonitor.SetWindowMenuInfo((IntPtr)retryWinId, retrySvc, retryPath);
+                                                    logger.LogInformation("  0x{W:X8}: DBus menu served via late RegisterWindow (retry #{A})", retryWinId, attempt);
+                                                    return;
+                                                }
+                                            }
+
+                                            logger.LogDebug("  0x{W:X8}: retry #{A} — still no menu", retryWinId, attempt);
+                                            continue;
+                                        }
 
                                         logger.LogInformation("  0x{W:X8}: AT-SPI widget appeared (retry {A}) — showing menu", retryWinId, attempt);
                                         exporter.UpdateAtSpi(rJson, atspi, rMap);
