@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "dgSpecHash": "aMlYKIsKn5o=",
+  "dgSpecHash": "SFjsIWdkQCw=",
   "success": true,
   "projectFilePath": "/home/joshd/Source/KDE/DBusService/DBusService/DBusService.csproj",
   "expectedPackageFiles": [
@@ -31,12 +31,26 @@
     "/home/joshd/.nuget/packages/microsoft.extensions.options/10.0.4/microsoft.extensions.options.10.0.4.nupkg.sha512",
     "/home/joshd/.nuget/packages/microsoft.extensions.options.configurationextensions/10.0.4/microsoft.extensions.options.configurationextensions.10.0.4.nupkg.sha512",
     "/home/joshd/.nuget/packages/microsoft.extensions.primitives/10.0.4/microsoft.extensions.primitives.10.0.4.nupkg.sha512",
-    "/home/joshd/.nuget/packages/microsoft.net.illink.tasks/10.0.4/microsoft.net.illink.tasks.10.0.4.nupkg.sha512",
+    "/home/joshd/.nuget/packages/microsoft.net.illink.tasks/10.0.6/microsoft.net.illink.tasks.10.0.6.nupkg.sha512",
     "/home/joshd/.nuget/packages/system.diagnostics.eventlog/10.0.4/system.diagnostics.eventlog.10.0.4.nupkg.sha512",
     "/home/joshd/.nuget/packages/tmds.dbus/0.91.0/tmds.dbus.0.91.0.nupkg.sha512",
-    "/home/joshd/.nuget/packages/microsoft.netcore.app.runtime.linux-x64/10.0.4/microsoft.netcore.app.runtime.linux-x64.10.0.4.nupkg.sha512",
-    "/home/joshd/.nuget/packages/microsoft.aspnetcore.app.runtime.linux-x64/10.0.4/microsoft.aspnetcore.app.runtime.linux-x64.10.0.4.nupkg.sha512",
-    "/home/joshd/.nuget/packages/microsoft.netcore.app.host.linux-x64/10.0.4/microsoft.netcore.app.host.linux-x64.10.0.4.nupkg.sha512"
+    "/home/joshd/.nuget/packages/microsoft.netcore.app.runtime.linux-x64/10.0.6/microsoft.netcore.app.runtime.linux-x64.10.0.6.nupkg.sha512",
+    "/home/joshd/.nuget/packages/microsoft.aspnetcore.app.runtime.linux-x64/10.0.6/microsoft.aspnetcore.app.runtime.linux-x64.10.0.6.nupkg.sha512",
+    "/home/joshd/.nuget/packages/microsoft.netcore.app.host.linux-x64/10.0.6/microsoft.netcore.app.host.linux-x64.10.0.6.nupkg.sha512"
   ],
-  "logs": []
+  "logs": [
+    {
+      "code": "NU1903",
+      "level": "Warning",
+      "message": "Package 'Tmds.DBus' 0.91.0 has a known high severity vulnerability, https://github.com/advisories/GHSA-xrw6-gwf8-vvr9",
+      "projectPath": "/home/joshd/Source/KDE/DBusService/DBusService/DBusService.csproj",
+      "warningLevel": 1,
+      "filePath": "/home/joshd/Source/KDE/DBusService/DBusService/DBusService.csproj",
+      "libraryId": "Tmds.DBus",
+      "targetGraphs": [
+        "net10.0",
+        "net10.0/linux-x64"
+      ]
+    }
+  ]
 }

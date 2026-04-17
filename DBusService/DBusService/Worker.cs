@@ -40,7 +40,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
     {
         // ── Build-identity banner — proves which binary is running ─────────────
         // Update this string whenever you want to confirm a fresh binary is loaded.
-        logger.LogInformation("=== DBusService build: 2026-04-03-v25a (retry loop: DBus registrar check for Chromium/Brave late RegisterWindow) ===");
+        logger.LogInformation("=== DBusService build: 2026-04-16-v26 (fix: dedup retry tasks + dispose AT-SPI ChildCount watchers) ===");
 
         using var connection = new Connection(Address.Session!);
         await connection.ConnectAsync();
@@ -140,6 +140,12 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
         // Once we confirm a window uses DBus or AT-SPI, we skip the full discovery loop
         // on subsequent focus events and go straight to the confirmed provider.
         var windowSources = new ConcurrentDictionary<uint, WindowMenuSource>();
+        // Windows currently running a retry task — prevents duplicate tasks when a window
+        // is re-focused before the previous retry loop finishes (Chromium/Brave pattern).
+        var retryInFlight = new ConcurrentDictionary<uint, byte>();
+        // Active AT-SPI ChildCount watchers keyed by window ID — must be disposed when
+        // resolved or when the service stops to avoid permanent D-Bus subscriptions.
+        var atspiWatchers = new ConcurrentDictionary<uint, IDisposable>();
         var prefetchEnabled = configuration.GetValue<bool>("GlobalMMMenu:EnablePrefetch", false);
         // AT-SPI reader — used as last resort for apps that have no dbusmenu object
         // (e.g. started before the registrar, or Qt builds that skip dbusmenu init).
@@ -158,6 +164,70 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
             : Task.CompletedTask;
         if (!prefetchEnabled)
             logger.LogInformation("[Prefetch] Background menu discovery disabled (EnablePrefetch=false)");
+
+        // ── Watchdog: detect and recover from a stuck-with-no-menu state ─────────
+        // If the currently active window has produced no menu for ≥ 30 s, evict its
+        // cached state and re-queue it into the discovery channel so the full cold-
+        // path cycle runs again.  This recovers silently when D-Bus objects become
+        // stale (e.g. kded5-appmenu restart, session bus hiccup) without requiring
+        // a full service restart.
+        var watchdogTask = Task.Run(async () =>
+        {
+            // Initial grace period: let startup discovery settle.
+            try { await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken); }
+            catch (OperationCanceledException) { return; }
+
+            uint trackedWindow = 0;
+            int  noMenuTicks   = 0;
+            const int TicksBeforeReset = 2; // 2 × 15 s = 30 s empty → reset
+
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                try { await Task.Delay(TimeSpan.FromSeconds(15), stoppingToken); }
+                catch (OperationCanceledException) { return; }
+
+                var activeId = windowMonitor.GetActiveWindow();
+                if (activeId == 0) { trackedWindow = 0; noMenuTicks = 0; continue; }
+
+                // Reset counter when focus moves to a different window.
+                if (activeId != trackedWindow) { trackedWindow = activeId; noMenuTicks = 0; continue; }
+
+                // Menu is present — nothing to do.
+                var current = exporter.LastMenuJson;
+                if (!string.IsNullOrEmpty(current) && current != "{}") { noMenuTicks = 0; continue; }
+
+                noMenuTicks++;
+                if (noMenuTicks < TicksBeforeReset)
+                {
+                    logger.LogDebug("[Watchdog] 0x{W:X8}: no menu (tick {T}/{N})", activeId, noMenuTicks, TicksBeforeReset);
+                    continue;
+                }
+
+                logger.LogInformation(
+                    "[Watchdog] 0x{W:X8}: no menu for ~{S}s — clearing cached state and retrying discovery",
+                    activeId, (noMenuTicks + 1) * 15);
+                noMenuTicks = 0; // reset so we wait another full cycle before trying again
+
+                // Evict all cached state so the cold-path runs unconditionally.
+                menuCache.TryRemove(activeId, out _);
+                windowSources.TryRemove(activeId, out _);
+                registrarImpl.RemoveRegistration(activeId);
+                windowMonitor.ClearWindowMenuInfo((IntPtr)activeId);
+
+                // Prod kded5-appmenu: it may hold showRequest data for this window
+                // that it never re-sent after our registrar came online.
+                try
+                {
+                    var kap = connection.CreateProxy<IKAppMenu>("org.kde.kappmenu", new ObjectPath("/KAppMenu"));
+                    await kap.reconfigureAsync();
+                    logger.LogDebug("[Watchdog] reconfigure() sent to kded5-appmenu");
+                }
+                catch (Exception ex) { logger.LogDebug("[Watchdog] reconfigure() skipped: {M}", ex.Message); }
+
+                // Re-queue the active window — the main loop will run full discovery.
+                channel.Writer.TryWrite((activeId, null, null));
+            }
+        }, stoppingToken);
 
         // ── Subscribe to org.kde.kappmenu.showRequest ─────────────────────────────
         // Native Wayland KDE apps (Konsole, Dolphin, etc.) use the Wayland appmenu
@@ -575,14 +645,18 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                         // to appear in the AT-SPI tree after GTK lazy-realizes it.
                         // Poll for up to 30 s in increasing intervals — covers both cases without
                         // flooding the bus on apps that genuinely have no menu.
-                        // Only fires once per window (windowSources check avoids duplicate retries).
-                        if (!windowSources.ContainsKey(windowId))
+                        // Only fires once per window — retryInFlight prevents duplicate tasks
+                        // when the window is re-focused while a retry loop is already running
+                        // (Chromium/Brave re-focuses while late-RegisterWindow is pending).
+                        if (!windowSources.ContainsKey(windowId) && retryInFlight.TryAdd(windowId, 0))
                         {
                             var retryWinId  = windowId;
                             var retryPid    = atspiPid;
                             var retryBusName = firstScanBusName; // may be null if first scan threw
                             logger.LogDebug("  0x{W:X8}: scheduling AT-SPI retry task (pid={P})", windowId, atspiPid);
                             _ = Task.Run(async () =>
+                            {
+                            try
                             {
                                 // Delays: 500ms × 6, then 2s × 12 = 3s + 24s = 27s total, ~18 probes.
                                 var delays = Enumerable.Repeat(500, 6).Concat(Enumerable.Repeat(2000, 12));
@@ -673,10 +747,12 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                                     logger.LogDebug("  0x{W:X8}: subscribing to AT-SPI ChildCount watcher on {Bus}", retryWinId, retryBusName);
                                     try
                                     {
-                                        await atspi.WatchAppNodeChildrenChangedAsync(
+                                        var watcher = await atspi.WatchAppNodeChildrenChangedAsync(
                                             retryBusName,
                                             () => _ = Task.Run(async () =>
                                             {
+                                                // Auto-dispose watcher after first fire — one-shot.
+                                                if (atspiWatchers.TryRemove(retryWinId, out var fired)) fired.Dispose();
                                                 if (windowSources.ContainsKey(retryWinId)) return;
                                                 logger.LogInformation("  0x{W:X8}: AT-SPI ChildCount changed — scanning after lazy realization", retryWinId);
                                                 try
@@ -699,9 +775,16 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                                                 catch (Exception wEx) { logger.LogDebug("  0x{W:X8}: ChildCount event scan failed: {M}", retryWinId, wEx.Message); }
                                             }, stoppingToken),
                                             ex => logger.LogDebug("  0x{W:X8}: ChildCount watcher error: {M}", retryWinId, ex.Message));
+                                        if (watcher != null)
+                                            atspiWatchers[retryWinId] = watcher;
                                     }
                                     catch (Exception wex) { logger.LogDebug("  0x{W:X8}: ChildCount watcher setup failed: {M}", retryWinId, wex.Message); }
                                 }
+                            }
+                            finally
+                            {
+                                retryInFlight.TryRemove(retryWinId, out _);
+                            }
                             }, stoppingToken);
                         }
                     }
@@ -971,9 +1054,13 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
             windowCts?.Dispose();
             layoutSub?.Dispose();
             propertySub?.Dispose();
+            // Dispose all outstanding AT-SPI ChildCount watchers to release D-Bus subscriptions.
+            foreach (var w in atspiWatchers.Values) w.Dispose();
+            atspiWatchers.Clear();
             channel.Writer.TryComplete();
             await monitorTask.ConfigureAwait(false);
             await prefetchTask.ConfigureAwait(false);
+            await watchdogTask.ConfigureAwait(false);
         }
     }
 
