@@ -43,15 +43,4 @@ install(TARGETS globalmenuhelper
 install(FILES "${CMAKE_SOURCE_DIR}/qmldir"
     DESTINATION "${QML_INSTALL_DIR}")
 
-# Also update the user-local plasmoid-bundled copies so the running widget
-# always picks up the latest build without needing a separate manual copy step.
-set(LOCAL_PLASMOID_DIRS
-    "$ENV{HOME}/.local/share/plasma/plasmoids/com.kde.plasma.globalmmenu/com/kde/plasma/globalmenu"
-    "$ENV{HOME}/.local/share/plasma/plasmoids/com.github.globalmmmenu/com/kde/plasma/globalmenu"
-)
-foreach(LOCAL_DIR IN LISTS LOCAL_PLASMOID_DIRS)
-    if(EXISTS "${LOCAL_DIR}")
-        install(TARGETS globalmenuhelper
-            LIBRARY DESTINATION "${LOCAL_DIR}")
-    endif()
-endforeach()
+
