@@ -155,6 +155,20 @@ install_systemd() {
     mkdir -p "$SYSTEMD_USER_DIR"
     cp "$SERVICE_DIR/globalmmmenu.service" "$SERVICE_UNIT"
 
+    # Ensure XDG_RUNTIME_DIR is available for systemctl --user (needed when the
+    # script is invoked via sudo or from a shell that did not inherit the user
+    # session environment).
+    export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+
+    if [[ ! -d "$XDG_RUNTIME_DIR" ]]; then
+        warn "XDG_RUNTIME_DIR ($XDG_RUNTIME_DIR) does not exist — cannot reach the user D-Bus session."
+        warn "The service unit was written to $SERVICE_UNIT."
+        warn "Run the following commands as your normal user to activate it:"
+        warn "  systemctl --user daemon-reload"
+        warn "  systemctl --user enable --now globalmmmenu.service"
+        return 0
+    fi
+
     info "Reloading systemd user daemon..."
     systemctl --user daemon-reload
 

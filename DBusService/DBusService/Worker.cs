@@ -40,7 +40,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
     {
         // ── Build-identity banner — proves which binary is running ─────────────
         // Update this string whenever you want to confirm a fresh binary is loaded.
-        logger.LogInformation("=== DBusService build: 2026-04-16-v26 (fix: dedup retry tasks + dispose AT-SPI ChildCount watchers) ===");
+        logger.LogInformation("=== DBusService build: 2026-04-30-v27 (fix: introspected paths before unresolved registrar paths; evict bad retry paths) ===");
 
         using var connection = new Connection(Address.Session!);
         await connection.ConnectAsync();
@@ -710,6 +710,13 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                                                     logger.LogInformation("  0x{W:X8}: DBus menu served via late RegisterWindow (retry #{A})", retryWinId, attempt);
                                                     return;
                                                 }
+                                                // Fetch returned no data — the stored path is a false positive
+                                                // (e.g. /MenuBar/1 on a Chromium connection that doesn't serve
+                                                // a menu there). Evict it so the next PID-scan attempt
+                                                // (every 3rd retry) re-discovers using the corrected candidate
+                                                // order (introspected paths first).
+                                                logger.LogDebug("  0x{W:X8}: fetch returned no data for {S} {P} — evicting stale registrar entry", retryWinId, retrySvc, retryPath);
+                                                registrarImpl.RemoveRegistration(retryWinId);
                                             }
 
                                             logger.LogDebug("  0x{W:X8}: retry #{A} — still no menu", retryWinId, attempt);
@@ -1448,10 +1455,13 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
             // Priority order:
             // 1. Known path (caller-supplied, e.g. from X11 props)
             // 2. Registrar paths already resolved to this service name
-            // 3. Unresolved registrar paths — Qt apps register with QWindow::winId(),
+            // 3. Introspection (discover real exports on /com/canonical/menu) — BEFORE
+            //    unresolved paths to avoid false positives (e.g. gmenudbusmenuproxy
+            //    registering /MenuBar/1 under a different KWin window ID triggering
+            //    IsKnownMenuError on a Chromium connection that has no menu there)
+            // 4. Unresolved registrar paths — Qt apps register with QWindow::winId(),
             //    which has no _NET_WM_PID so ResolveServiceAsync leaves them with
             //    Service=null. We've confirmed this connection's PID matches, so try them.
-            // 4. Introspection (discover real exports on /com/canonical/menu)
             // 5. Format guesses (hex/decimal)
             var candidatePaths = guessPaths ?? [];
             if (guessPaths == null)
@@ -1487,9 +1497,17 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                     $"/com/canonical/menu/{windowId:X}",
                 };
 
+                // Introspected paths come BEFORE unresolved registrar paths because
+                // introspection discovers the real exported objects on this connection
+                // (e.g. /com/canonical/menu/1 for Chromium/Brave), whereas unresolved
+                // registrar paths may be stale gmenudbusmenuproxy entries registered
+                // under a different KWin window ID that cause false-positive matches
+                // via IsKnownMenuError on the wrong path (e.g. /MenuBar/1 on Brave's
+                // connection triggers the "com.canonical.dbusmenu" error but the object
+                // at that path does not actually serve a menu).
                 candidatePaths = resolvedPaths
-                    .Concat(unresolvedPaths)
                     .Concat(introspectedPaths)
+                    .Concat(unresolvedPaths)
                     .Concat(fallbackPaths)
                     .Distinct()
                     .ToArray();
