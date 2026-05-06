@@ -14,6 +14,10 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
 
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
+    // Set by LogMenuJsonAsync when LimitsExceeded is returned from D-Bus — the circuit breaker
+    // monitor task in ExecuteAsync watches this flag and cancels all retry tasks to drain the queue.
+    private volatile bool _triggerRetryReset;
+
     // Controls how much menu JSON is written to the log.
     private enum MenuLogMode { Full, Limited, None }
     private MenuLogMode GetMenuLogMode() =>
@@ -40,7 +44,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
     {
         // ── Build-identity banner — proves which binary is running ─────────────
         // Update this string whenever you want to confirm a fresh binary is loaded.
-        logger.LogInformation("=== DBusService build: 2026-04-30-v27 (fix: introspected paths before unresolved registrar paths; evict bad retry paths) ===");
+        logger.LogInformation("=== DBusService build: 2026-05-06-v28 (circuit breaker: cancel retry tasks on LimitsExceeded; semaphore guards concurrent PID scans) ===");
 
         using var connection = new Connection(Address.Session!);
         await connection.ConnectAsync();
@@ -143,6 +147,12 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
         // Windows currently running a retry task — prevents duplicate tasks when a window
         // is re-focused before the previous retry loop finishes (Chromium/Brave pattern).
         var retryInFlight = new ConcurrentDictionary<uint, byte>();
+        // Circuit breaker CTS — cancel to abort all current retry tasks immediately.
+        // Replaced (not disposed) on each trip so old tasks exit and new ones start clean.
+        var cbCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+        // Semaphore: at most 1 concurrent D-Bus PID scan across all retry tasks.
+        // Prevents multiple retrying windows from flooding the D-Bus connection simultaneously.
+        using var retryPidSemaphore = new SemaphoreSlim(1, 1);
         // Active AT-SPI ChildCount watchers keyed by window ID — must be disposed when
         // resolved or when the service stops to avoid permanent D-Bus subscriptions.
         var atspiWatchers = new ConcurrentDictionary<uint, IDisposable>();
@@ -226,6 +236,50 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
 
                 // Re-queue the active window — the main loop will run full discovery.
                 channel.Writer.TryWrite((activeId, null, null));
+            }
+        }, stoppingToken);
+
+        // ── Circuit breaker: recover from D-Bus LimitsExceeded saturation ─────────
+        // When the D-Bus pending-reply limit is hit (multiple retry tasks all running
+        // FindMenuByPidAsync concurrently), every call on the connection fails — even
+        // fast-path fetches for the focused window.  LogMenuJsonAsync sets
+        // _triggerRetryReset when it sees LimitsExceeded.  This task detects that flag,
+        // cancels all in-flight retry tasks via cbCts, waits 2 s for the queue to drain,
+        // then re-triggers discovery for the currently active window.
+        var circuitBreakerTask = Task.Run(async () =>
+        {
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                try { await Task.Delay(TimeSpan.FromMilliseconds(800), stoppingToken); }
+                catch (OperationCanceledException) { return; }
+
+                if (!_triggerRetryReset) continue;
+                _triggerRetryReset = false;
+
+                var count = retryInFlight.Count;
+                logger.LogWarning(
+                    "[CircuitBreaker] D-Bus LimitsExceeded detected — cancelling {N} retry task(s) and waiting 2s to drain",
+                    count);
+
+                // Replace the circuit breaker CTS: old tasks see cancellation, new ones start fresh.
+                var oldCbCts = cbCts;
+                cbCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                oldCbCts.Cancel(); // abort all retry-task delays
+                retryInFlight.Clear();
+
+                // Give the D-Bus reply queue time to drain before retrying.
+                try { await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken); }
+                catch (OperationCanceledException) { return; }
+
+                var activeWin = windowMonitor.GetActiveWindow();
+                if (activeWin != 0)
+                {
+                    // Evict cached state so cold-path discovery runs unconditionally.
+                    menuCache.TryRemove(activeWin, out _);
+                    windowSources.TryRemove(activeWin, out _);
+                    logger.LogInformation("[CircuitBreaker] Re-triggering discovery for 0x{W:X8}", activeWin);
+                    channel.Writer.TryWrite((activeWin, null, null));
+                }
             }
         }, stoppingToken);
 
@@ -656,6 +710,10 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                             logger.LogDebug("  0x{W:X8}: scheduling AT-SPI retry task (pid={P})", windowId, atspiPid);
                             _ = Task.Run(async () =>
                             {
+                            // Link to cbCts so the circuit breaker can abort this task immediately
+                            // when LimitsExceeded saturation is detected.
+                            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, cbCts.Token);
+                            var retryToken = linkedCts.Token;
                             try
                             {
                                 // Delays: 500ms × 6, then 2s × 12 = 3s + 24s = 27s total, ~18 probes.
@@ -664,7 +722,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                                 foreach (var delayMs in delays)
                                 {
                                     attempt++;
-                                    try { await Task.Delay(delayMs, stoppingToken); }
+                                    try { await Task.Delay(delayMs, retryToken); }
                                     catch (OperationCanceledException) { return; }
 
                                     // Stop if a newer focus event already resolved this window.
@@ -673,7 +731,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                                     logger.LogDebug("  0x{W:X8}: AT-SPI retry #{A} (pid={P})", retryWinId, attempt, retryPid);
                                     try
                                     {
-                                        using var rCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                                        using var rCts = CancellationTokenSource.CreateLinkedTokenSource(retryToken);
                                         rCts.CancelAfter(TimeSpan.FromSeconds(10));
                                         var (rJson, rMap, rBus) = await atspi.GetMenuJsonForPidAsync(retryPid, rCts.Token);
                                         if (string.IsNullOrEmpty(rJson) || rJson == "{}")
@@ -688,11 +746,21 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                                             var (retrySvc, retryPath) = registrarImpl.TryGetMenu(retryWinId);
                                             if (string.IsNullOrEmpty(retrySvc) && attempt % 3 == 0)
                                             {
-                                                using var dbsCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
-                                                dbsCts.CancelAfter(TimeSpan.FromSeconds(8));
-                                                (retrySvc, retryPath) = await FindMenuByPidAsync(
-                                                    connection, dbus, windowMonitor, registrarImpl,
-                                                    retryWinId, null, dbsCts.Token);
+                                                // Semaphore: only 1 concurrent PID scan across all retry tasks.
+                                                // Prevents multiple stuck windows from flooding D-Bus simultaneously.
+                                                if (await retryPidSemaphore.WaitAsync(0))
+                                                {
+                                                    try
+                                                    {
+                                                        using var dbsCts = CancellationTokenSource.CreateLinkedTokenSource(retryToken);
+                                                        dbsCts.CancelAfter(TimeSpan.FromSeconds(8));
+                                                        (retrySvc, retryPath) = await FindMenuByPidAsync(
+                                                            connection, dbus, windowMonitor, registrarImpl,
+                                                            retryWinId, null, dbsCts.Token);
+                                                    }
+                                                    finally { retryPidSemaphore.Release(); }
+                                                }
+                                                // else: another scan is already running — skip this attempt's scan
                                             }
 
                                             if (!string.IsNullOrEmpty(retrySvc) && !string.IsNullOrEmpty(retryPath) && retryPath != "/")
@@ -1068,6 +1136,8 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
             await monitorTask.ConfigureAwait(false);
             await prefetchTask.ConfigureAwait(false);
             await watchdogTask.ConfigureAwait(false);
+            await circuitBreakerTask.ConfigureAwait(false);
+            cbCts.Dispose();
         }
     }
 
@@ -1685,6 +1755,13 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
         try { await fetchTask; }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { }
         catch (StaleMenuPathException) { throw; }  // propagate so caller can attempt re-discovery
+        catch (DBusException dbe) when (dbe.ErrorName == "org.freedesktop.DBus.Error.LimitsExceeded")
+        {
+            // D-Bus pending-reply limit reached — multiple retry tasks are flooding the connection.
+            // Signal the circuit breaker monitor to cancel all retry tasks and drain the queue.
+            _triggerRetryReset = true;
+            logger.LogWarning("  [{Service}] D-Bus LimitsExceeded — connection saturated, circuit breaker signalled", service);
+        }
         catch (Exception ex) { logger.LogWarning(ex, "  [{Service}] Failed to fetch menu layout", service); }
     }
 
