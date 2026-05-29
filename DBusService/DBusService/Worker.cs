@@ -44,7 +44,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
     {
         // ── Build-identity banner — proves which binary is running ─────────────
         // Update this string whenever you want to confirm a fresh binary is loaded.
-        logger.LogInformation("=== DBusService build: 2026-05-06-v28 (circuit breaker: cancel retry tasks on LimitsExceeded; semaphore guards concurrent PID scans) ===");
+        logger.LogInformation("=== DBusService build: 2026-05-29-v29 (fix: LayoutUpdated persistent-failure re-discovery; IsKnownMenuError rejects broken dbusmenu endpoints) ===");
 
         using var connection = new Connection(Address.Session!);
         await connection.ConnectAsync();
@@ -1036,10 +1036,24 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                 cts.CancelAfter(TimeSpan.FromSeconds(3));
 
                 var menuPath   = new ObjectPath(path);
+                var capturedWindowId = windowId;
                 var processTask = FetchMenuAsync(
                     connection, service, menuPath, stoppingToken, windowCts!.Token,
                     sub => layoutSub   = sub,
-                    sub => propertySub = sub);
+                    sub => propertySub = sub,
+                    onPersistentLayoutFailure: () =>
+                    {
+                        // The active menu source can't serve GetLayout — evict all cached state
+                        // and re-queue the window so the main loop runs full re-discovery.
+                        menuCache.TryRemove(capturedWindowId, out _);
+                        windowSources.TryRemove(capturedWindowId, out _);
+                        registrarImpl.RemoveRegistration(capturedWindowId);
+                        windowMonitor.ClearWindowMenuInfo((IntPtr)capturedWindowId);
+                        logger.LogInformation(
+                            "  0x{W:X8}: persistent LayoutUpdated failures — re-queuing for full re-discovery",
+                            capturedWindowId);
+                        channel.Writer.TryWrite((capturedWindowId, null, null));
+                    });
 
                 await Task.WhenAny(processTask, Task.Delay(Timeout.Infinite, cts.Token));
 
@@ -1293,12 +1307,14 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
         // message says "Object does not exist at path") — treat as not found.
         if (inner.ErrorName == "org.freedesktop.DBus.Error.UnknownMethod")
         {
-            // If the message explicitly says the com.canonical.dbusmenu interface
-            // exists but this specific method/signature isn't present, the object IS
-            // there — just an older/different dbusmenu API version (e.g. VS Code/Electron).
-            if (inner.Message.Contains("com.canonical.dbusmenu"))
+            // The object IS there only when the interface exists but the specific
+            // method/signature is mismatched (e.g. VS Code/Electron dbusmenu variant).
+            // If the error says the method "doesn't exist" (i.e. the interface exposes no
+            // such method at all), the endpoint does NOT implement a real dbusmenu and
+            // should NOT be treated as a valid menu source.
+            if (inner.Message.Contains("com.canonical.dbusmenu") && !inner.Message.Contains("doesn't exist"))
                 return true;
-            // Otherwise (e.g. "Object does not exist at path …") treat as not found.
+            // Otherwise (e.g. "Object does not exist at path …", or method absent) treat as not found.
             return false;
         }
         return true;
@@ -1701,16 +1717,26 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
         CancellationToken stoppingToken,
         CancellationToken windowToken,
         Action<IDisposable?> setLayoutSub,
-        Action<IDisposable?> setPropertySub)
+        Action<IDisposable?> setPropertySub,
+        Action? onPersistentLayoutFailure = null)
     {
         var menu = connection.CreateProxy<IDbusMenu>(service, menuPath);
 
         await LogMenuJsonAsync(menu, service, stoppingToken);
 
+        // Track consecutive LayoutUpdated re-fetch failures. If the same menu endpoint
+        // repeatedly fails GetLayout (e.g. a broken dbusmenu implementation that sends
+        // LayoutUpdated signals but doesn't implement GetLayout), give up after
+        // MaxConsecutiveLayoutFailures and trigger full re-discovery for this window.
+        int consecutiveLayoutFailures = 0;
+        bool layoutFailureReported = false;
+        const int MaxConsecutiveLayoutFailures = 3;
+
         setLayoutSub(await menu.WatchLayoutUpdatedAsync(
             args =>
             {
                 if (windowToken.IsCancellationRequested) return;  // window already changed
+                if (layoutFailureReported) return;                 // already gave up on this source
                 logger.LogInformation(
                     "  [{Service}] Menu layout updated (revision={Revision}) — re-fetching",
                     service, args.Revision);
@@ -1718,10 +1744,27 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                 {
                     using var cts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, windowToken);
                     cts.CancelAfter(TimeSpan.FromSeconds(3));
-                    try { await FetchAndLogMenuAsync(menu, service, stoppingToken, cts.Token); }
+                    try
+                    {
+                        await FetchAndLogMenuAsync(menu, service, stoppingToken, cts.Token);
+                        consecutiveLayoutFailures = 0; // reset on success
+                    }
                     catch (Exception ex) when (!stoppingToken.IsCancellationRequested && !windowToken.IsCancellationRequested)
                     {
-                        logger.LogDebug("  [{Service}] Re-fetch after LayoutUpdated failed: {M}", service, ex.Message);
+                        consecutiveLayoutFailures++;
+                        if (consecutiveLayoutFailures >= MaxConsecutiveLayoutFailures && !layoutFailureReported)
+                        {
+                            layoutFailureReported = true;
+                            logger.LogWarning(
+                                "  [{Service}] {N} consecutive LayoutUpdated re-fetch failures — menu source is broken, triggering re-discovery",
+                                service, consecutiveLayoutFailures);
+                            onPersistentLayoutFailure?.Invoke();
+                        }
+                        else
+                        {
+                            logger.LogDebug("  [{Service}] Re-fetch after LayoutUpdated failed ({N}/{Max}): {M}",
+                                service, consecutiveLayoutFailures, MaxConsecutiveLayoutFailures, ex.Message);
+                        }
                     }
                 });
             },
@@ -1815,10 +1858,14 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
         exporter.Update(json, menu);
         } // end try
         catch (DBusException dbe) when (
-            (dbe.ErrorName == "org.freedesktop.DBus.Error.UnknownMethod" && dbe.Message.Contains("Object does not exist")) ||
+            (dbe.ErrorName == "org.freedesktop.DBus.Error.UnknownMethod" &&
+             (dbe.Message.Contains("Object does not exist") || dbe.Message.Contains("doesn't exist"))) ||
             dbe.ErrorName == "org.freedesktop.DBus.Error.ServiceUnknown" ||
             dbe.ErrorName == "org.freedesktop.DBus.Error.UnknownObject")
         {
+            // "doesn't exist" covers cases where GetLayout itself is absent on the interface
+            // (broken dbusmenu endpoint) — treat as stale so re-discovery runs instead of
+            // repeating the warn every 30 s.
             throw new StaleMenuPathException(service, dbe);
         }
     }
