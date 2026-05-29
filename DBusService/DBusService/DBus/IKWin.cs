@@ -89,5 +89,5 @@ public interface IKWinWindowCallback : IDBusObject
     /// <paramref name="pid"/>      is <c>String(client.pid)</c>      — passed as string to avoid D-Bus type mismatch.
     /// <paramref name="caption"/>  is <c>String(client.caption)</c>  — window title for logging and fallback matching.
     /// </summary>
-    Task WindowActivatedAsync(string windowId, string pid, string caption, string internalId);
+    Task WindowActivatedAsync(string windowId, string pid, string caption, string internalId, string gx, string gy);
 }

@@ -126,10 +126,12 @@ public sealed class WaylandWindowMonitor : IActiveWindowMonitor, IKWinWindowCall
     /// <c>workspace.clientActivated</c> fires.  Fires <see cref="ActiveWindowChanged"/>
     /// on the monitor so the <c>Worker</c> can handle it identically to X11.
     /// </summary>
-    public Task WindowActivatedAsync(string windowId, string pid, string caption, string internalId)
+    public Task WindowActivatedAsync(string windowId, string pid, string caption, string internalId, string gx, string gy)
     {
         if (!uint.TryParse(windowId, out var rawId)) return Task.CompletedTask;
         uint.TryParse(pid, out var pidVal);
+        int.TryParse(gx, out var gxVal);
+        int.TryParse(gy, out var gyVal);
 
         uint id;
         if (rawId != 0)
@@ -139,28 +141,36 @@ public sealed class WaylandWindowMonitor : IActiveWindowMonitor, IKWinWindowCall
         }
         else if (!string.IsNullOrEmpty(internalId))
         {
-            // Native Wayland window: KWin reports windowId=0 but provides a stable UUID
-            // (internalId) that is unique per window.  Hash the UUID to a uint with bit 31
-            // set so it can't collide with real X11 IDs (which top out around 0x07FFFFFF).
-            // Using the FNV-1a 32-bit hash on the raw string bytes is deterministic and
-            // produces good distribution for UUID inputs.
+            // KWin provided a UUID string — hash it to a stable uint.
             uint hash = 2166136261u;
-            foreach (var c in internalId)
-            {
-                hash ^= (byte)c;
-                hash *= 16777619u;
-            }
+            foreach (var c in internalId) { hash ^= (byte)c; hash *= 16777619u; }
+            id = 0x80000000u | (hash & 0x7FFFFFFFu);
+        }
+        else if (pidVal != 0 && (gxVal != 0 || gyVal != 0))
+        {
+            // Native Wayland, no internalId: use PID + window position to discriminate
+            // multiple windows of the same app.  Position (gx, gy) is unique per window
+            // on screen and stable between focus events as long as the window is not moved.
+            // FNV-1a mix of pid, gx, gy → stable uint with bit 31 set.
+            uint hash = 2166136261u;
+            hash ^= (byte)(pidVal)        ; hash *= 16777619u;
+            hash ^= (byte)(pidVal >> 8)   ; hash *= 16777619u;
+            hash ^= (byte)(pidVal >> 16)  ; hash *= 16777619u;
+            hash ^= (byte)(pidVal >> 24)  ; hash *= 16777619u;
+            hash ^= (byte)(gxVal)         ; hash *= 16777619u;
+            hash ^= (byte)(gxVal >> 8)    ; hash *= 16777619u;
+            hash ^= (byte)(gyVal)         ; hash *= 16777619u;
+            hash ^= (byte)(gyVal >> 8)    ; hash *= 16777619u;
             id = 0x80000000u | (hash & 0x7FFFFFFFu);
         }
         else if (pidVal != 0)
         {
-            // Fallback: no internalId — synthesise from PID (old behaviour).
-            // This path is only hit by very old KWin builds that don't expose internalId.
+            // Last resort: PID only (old behaviour, collapses multi-window apps).
             id = 0x80000000u | (pidVal & 0x7FFFFFFFu);
         }
         else
         {
-            _logger.LogDebug("[Wayland] clientActivated: windowId=0, no internalId, pid=0 — ignoring");
+            _logger.LogDebug("[Wayland] clientActivated: windowId=0 and no discriminator — ignoring");
             return Task.CompletedTask;
         }
 
@@ -176,8 +186,8 @@ public sealed class WaylandWindowMonitor : IActiveWindowMonitor, IKWinWindowCall
         }
 
         var (svc, path) = GetWindowMenuInfo((IntPtr)id);
-        _logger.LogInformation("[Wayland] clientActivated windowId={RawId} id=0x{I:X8} pid={P} caption={C} iid={IId}",
-            rawId, id, pidVal, caption, internalId);
+        _logger.LogInformation("[Wayland] clientActivated windowId={RawId} id=0x{I:X8} pid={P} geo=({GX},{GY}) caption={C}",
+            rawId, id, pidVal, gxVal, gyVal, caption);
         ActiveWindowChanged?.Invoke((id, svc, path));
         return Task.CompletedTask;
     }
@@ -263,23 +273,25 @@ public sealed class WaylandWindowMonitor : IActiveWindowMonitor, IKWinWindowCall
         // c.caption    = window title string — used for display and fallback matching.
         //
         // Strategy: pass (c.windowId || 0) as wid — gives 0 for Wayland-native windows.
-        // Also pass c.internalId (a stable UUID string like "{4898dcbd-...}") — unique
-        // per window.  C# uses it to synthesise a stable per-window ID from its hash when
-        // wid==0, replacing the old pid-based ID that mapped every window of the same app
-        // to the same synthetic ID.
+        // Also pass c.x and c.y (top-left corner of the window frame in screen coordinates).
+        // These are unique per window on screen and stable between focus events as long as
+        // the window is not moved.  C# combines them with the PID into a stable synthetic ID
+        // when wid==0, replacing the old pid-only ID that mapped every Brave window to the same ID.
+        // internalId is also passed (empty string if unavailable in this KWin version).
         // All values passed as strings to avoid int32/uint32 D-Bus type mismatch.
         // Tmds.DBus strips "Async" from WindowActivatedAsync → D-Bus method "WindowActivated".
         // Use $@"..." (verbatim interpolated): "" → literal quote, {{ / }} → literal brace.
         var script = $@"workspace.clientActivated.connect(function(c) {{
     if (!c) return;
-    // windowId is a JS number for X11/XWayland, undefined for native Wayland.
-    // internalId is a UUID string unique per window — use it for native Wayland.
     var wid = c.windowId || 0;
     var iid = (typeof c.internalId === 'string') ? c.internalId : '';
+    var gx  = c.geometry ? c.geometry.x : (c.x || 0);
+    var gy  = c.geometry ? c.geometry.y : (c.y || 0);
     callDBus(
         ""com.kde.GlobalMMMenu"", ""{CallbackPath}"",
         ""com.kde.GlobalMMMenu.WindowMonitor"", ""WindowActivated"",
-        String(wid), String(c.pid || 0), String(c.caption || ''), iid
+        String(wid), String(c.pid || 0), String(c.caption || ''), iid,
+        String(gx), String(gy)
     );
 }});
 ";
