@@ -196,6 +196,15 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                 try { await Task.Delay(TimeSpan.FromSeconds(15), stoppingToken); }
                 catch (OperationCanceledException) { return; }
 
+                // Prune menuCache and windowSources for windows that no longer exist.
+                // menuCache entries can be 5-50 KB each; without pruning they accumulate
+                // indefinitely over a long session as windows are opened and closed.
+                var liveWindows = windowMonitor.GetAllClientWindows().ToHashSet();
+                foreach (var cachedId in menuCache.Keys.ToArray())
+                    if (!liveWindows.Contains(cachedId)) menuCache.TryRemove(cachedId, out _);
+                foreach (var srcId in windowSources.Keys.ToArray())
+                    if (!liveWindows.Contains(srcId)) windowSources.TryRemove(srcId, out _);
+
                 var activeId = windowMonitor.GetActiveWindow();
                 if (activeId == 0) { trackedWindow = 0; noMenuTicks = 0; continue; }
 
@@ -264,7 +273,8 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                 // Replace the circuit breaker CTS: old tasks see cancellation, new ones start fresh.
                 var oldCbCts = cbCts;
                 cbCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
-                oldCbCts.Cancel(); // abort all retry-task delays
+                oldCbCts.Cancel();   // abort all retry-task delays
+                oldCbCts.Dispose();  // Bug 2: prevent CTS handle leak on each circuit breaker trip
                 retryInFlight.Clear();
 
                 // Give the D-Bus reply queue time to drain before retrying.
@@ -366,6 +376,12 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
 
                 layoutSub?.Dispose();   layoutSub   = null;
                 propertySub?.Dispose(); propertySub = null;
+
+                // Stability: evict any lingering AT-SPI ChildCount watcher for this window.
+                // The watcher is set up only when the retry loop exhausts without finding a menu.
+                // If the window is re-queued (watchdog / KAppMenu / channel) before the watcher fires,
+                // it becomes stale — dispose it now so the D-Bus subscription is released.
+                if (atspiWatchers.TryRemove(windowId, out var staleWatcher)) staleWatcher.Dispose();
 
                 logger.LogInformation("Active window → 0x{WindowId:X8}  [{Name}]",
                     windowId, windowMonitor.GetWindowName((IntPtr)windowId) ?? "?");
@@ -776,6 +792,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                                                     windowSources[retryWinId] = new WindowMenuSource(MenuSourceType.DbusMenu, Service: retrySvc, Path: retryPath);
                                                     windowMonitor.SetWindowMenuInfo((IntPtr)retryWinId, retrySvc, retryPath);
                                                     logger.LogInformation("  0x{W:X8}: DBus menu served via late RegisterWindow (retry #{A})", retryWinId, attempt);
+                                                    if (atspiWatchers.TryRemove(retryWinId, out var w1)) w1.Dispose();
                                                     return;
                                                 }
                                                 // Fetch returned no data — the stored path is a false positive
@@ -806,6 +823,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                                             exporter.UpdateAtSpi(enriched, atspi, rMap);
                                             menuCache[retryWinId] = enriched;
                                         }
+                                        if (atspiWatchers.TryRemove(retryWinId, out var w2)) w2.Dispose();
                                         return;
                                     }
                                     catch (Exception ex) { logger.LogDebug("  0x{W:X8}: AT-SPI retry #{A} exception: {M}", retryWinId, attempt, ex.Message); }
@@ -1820,7 +1838,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
         }, TaskScheduler.Default);
 
         // Give the app a moment to populate the root level.
-        await Task.Delay(30, stoppingToken);
+        await Task.Delay(30, timeoutToken);  // use timeoutToken so ghost tasks don't outlive the caller's timeout
 
         // ── Stage 2: shallow layout to get top-level child IDs ───────────────
         var (_, shallowLayout) = await menu.GetLayoutAsync(0, 1, []);
@@ -1841,7 +1859,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
         }
 
         if (shallowLayout.Children.Length > 0)
-            await Task.Delay(30, stoppingToken);
+            await Task.Delay(30, timeoutToken);
 
         // ── Stage 3b: depth-2 layout — prime lazy submenus (e.g. Dolphin "Create New") ─
         // The app won't populate a submenu's children until AboutToShow is called for it.
@@ -1869,7 +1887,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
             }, TaskScheduler.Default);
         }
         if (depth2Layout.Children.Length > 0)
-            await Task.Delay(30, stoppingToken);
+            await Task.Delay(30, timeoutToken);
 
         // ── Stage 4: full deep layout ─────────────────────────────────────────
         var (_, layout) = await menu.GetLayoutAsync(0, -1, []);

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using DBusService.DBus;
 using Tmds.DBus;
 
@@ -19,7 +20,9 @@ public class GlobalMenuExporter : IGlobalMenuService
 
     // AT-SPI / GtkMenu items don't have integer IDs — we assign synthetic ones and map back to path.
     // Key = synthetic int ID (>= 1), Value = (atspiBusName/sessionBusName, objectPath/encodedAction)
-    private readonly Dictionary<int, (string BusName, string Path)> _atspiIdMap = new();
+    // ConcurrentDictionary: Update* methods write from background Task.Run threads; ExecuteItemAsync
+    // reads from the D-Bus dispatch thread. A plain Dictionary would race on Clear()+repopulate.
+    private readonly ConcurrentDictionary<int, (string BusName, string Path)> _atspiIdMap = new();
 
     public ObjectPath ObjectPath => new("/com/kde/GlobalMMMenu");
 
@@ -63,6 +66,7 @@ public class GlobalMenuExporter : IGlobalMenuService
         _atspiIdMap.Clear();
     }
 
+
     /// <summary>Stores a GtkMenu (org.gtk.Menus) menu for execution routing.</summary>
     public void UpdateGtkMenu(string menuJson, GtkMenuReader reader, Connection sessionConnection,
         Dictionary<int, (string BusName, string Path)> idMap)
@@ -74,7 +78,7 @@ public class GlobalMenuExporter : IGlobalMenuService
         _sessionConn = sessionConnection;
         _atspiIdMap.Clear();
         foreach (var (k, v) in idMap)
-            _atspiIdMap[k] = v;
+            _atspiIdMap.TryAdd(k, v);
     }
 
     /// <summary>
@@ -95,8 +99,10 @@ public class GlobalMenuExporter : IGlobalMenuService
         _menuJson    = menuJson;
         _activeMenu  = dbusMenu;
         _atspiReader = reader;
+        _gtkReader   = null;   // Bug 3: clear stale GtkMenu state so Execute routing is correct
+        _sessionConn = null;
         _atspiIdMap.Clear();
         foreach (var (k, v) in idMap)
-            _atspiIdMap[k] = v;
+            _atspiIdMap.TryAdd(k, v);
     }
 }
