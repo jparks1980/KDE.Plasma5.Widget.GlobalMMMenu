@@ -19,14 +19,27 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
     private volatile bool _triggerRetryReset;
 
     // Controls how much menu JSON is written to the log.
+    // Read once at startup — changing the value requires a service restart.
     private enum MenuLogMode { Full, Limited, None }
-    private MenuLogMode GetMenuLogMode() =>
-        configuration["GlobalMMMenu:MenuLogMode"] switch
-        {
-            "None"    => MenuLogMode.None,
-            "Full"    => MenuLogMode.Full,
-            _         => MenuLogMode.Limited,  // default: Limited
-        };
+    private MenuLogMode _menuLogMode = MenuLogMode.Limited; // default until ExecuteAsync reads config
+    private MenuLogMode GetMenuLogMode() => _menuLogMode;
+
+    // D-Bus bus-name list cache. ListNamesAsync does a full D-Bus round-trip and can be called
+    // from FindMenuByPidAsync, ScanConnectionsForMenusAsync, and the prefetch loop in rapid
+    // succession during startup or retry storms. Cache for 3 s to avoid redundant round-trips.
+    private string[]? _cachedBusNames;
+    private DateTime  _busNamesCachedAt = DateTime.MinValue;
+    private static readonly TimeSpan BusNameCacheTtl = TimeSpan.FromSeconds(3);
+
+    private async Task<string[]> GetCachedBusNamesAsync(IFreedesktopDBus dbus)
+    {
+        if (_cachedBusNames != null && DateTime.UtcNow - _busNamesCachedAt < BusNameCacheTtl)
+            return _cachedBusNames;
+        var names = await dbus.ListNamesAsync();
+        _cachedBusNames = names;
+        _busNamesCachedAt = DateTime.UtcNow;
+        return names;
+    }
 
     // Tracks which discovery method successfully served a menu for each X11 window.
     // Used to skip the full registrar/X11/PID/poll cycle on subsequent focus events.
@@ -44,11 +57,20 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
     {
         // ── Build-identity banner — proves which binary is running ─────────────
         // Update this string whenever you want to confirm a fresh binary is loaded.
-        logger.LogInformation("=== DBusService build: 2026-05-29-v30 (fix: depth-2 AboutToShow priming in FetchAndLogMenuAsync — populates lazy submenus e.g. Dolphin Create New) ===");
+        logger.LogInformation("=== DBusService build: 2026-05-29-v31 (perf: cache MenuLogMode + ListNamesAsync; stability/bug fixes) ===");
 
         using var connection = new Connection(Address.Session!);
         await connection.ConnectAsync();
         logger.LogInformation("Connected to D-Bus session bus");
+
+        // Cache MenuLogMode once at startup rather than re-evaluating the config key on every fetch.
+        _menuLogMode = configuration["GlobalMMMenu:MenuLogMode"] switch
+        {
+            "None" => MenuLogMode.None,
+            "Full" => MenuLogMode.Full,
+            _      => MenuLogMode.Limited,
+        };
+        logger.LogInformation("Menu log mode: {M}", _menuLogMode);
 
         await connection.RegisterServiceAsync("com.kde.GlobalMMMenu");
         await connection.RegisterObjectAsync(exporter);
@@ -1398,7 +1420,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
         if (windowsByPid.Count == 0) return;
 
         string[] names;
-        try { names = await dbus.ListNamesAsync(); }
+        try { names = await GetCachedBusNamesAsync(dbus); }
         catch { return; }
 
         int found = 0;
@@ -1515,7 +1537,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
         }
 
         string[] names;
-        try { names = await dbus.ListNamesAsync(); }
+        try { names = await GetCachedBusNamesAsync(dbus); }
         catch { return (null, null); }
 
         // Candidate paths to try on connections matching this PID.
