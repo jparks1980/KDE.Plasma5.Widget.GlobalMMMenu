@@ -450,7 +450,9 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                                     using var rCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
                                     rCts.CancelAfter(TimeSpan.FromSeconds(15));
                                     var (freshJson, freshMap) = await atspi.GetMenuJsonFromConnectionAsync(
-                                        fSrc.AtSpiBusName!, rCts.Token);
+                                        fSrc.AtSpiBusName!, rCts.Token,
+                                        preferredWindowId: fWinId,
+                                        preferredWindowTitle: windowMonitor.GetWindowName((IntPtr)fWinId));
                                     if (string.IsNullOrEmpty(freshJson) || freshJson == "{}") return;
 
                                     if (!string.IsNullOrEmpty(fSrc.DbusService) && !string.IsNullOrEmpty(fSrc.DbusPath))
@@ -502,7 +504,10 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                         fastCts.CancelAfter(TimeSpan.FromSeconds(15));
                         try
                         {
-                            var (fJson, fMap) = await atspi.GetMenuJsonFromConnectionAsync(knownSrc.AtSpiBusName!, fastCts.Token);
+                            var (fJson, fMap) = await atspi.GetMenuJsonFromConnectionAsync(
+                                knownSrc.AtSpiBusName!, fastCts.Token,
+                                preferredWindowId: windowId,
+                                preferredWindowTitle: windowMonitor.GetWindowName((IntPtr)windowId));
                             if (!string.IsNullOrEmpty(fJson) && fJson != "{}")
                             {
                                 logger.LogInformation("  0x{W:X8}: fast-path AT-SPI (bus={B})", windowId, knownSrc.AtSpiBusName);
@@ -590,7 +595,9 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                         try
                         {
                             var (atspiJson, atspiIdMap, atspiBusName) =
-                                await atspi.GetMenuJsonForPidAsync(atspiPid, atspiFirstCts.Token);
+                                await atspi.GetMenuJsonForPidAsync(atspiPid, atspiFirstCts.Token,
+                                    preferredWindowId: windowId,
+                                    preferredWindowTitle: windowMonitor.GetWindowName((IntPtr)windowId));
                             firstScanBusName = atspiBusName; // keep for event-driven retry below
                             if (!string.IsNullOrEmpty(atspiJson) && atspiJson != "{}")
                             {
@@ -771,7 +778,9 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                                     {
                                         using var rCts = CancellationTokenSource.CreateLinkedTokenSource(retryToken);
                                         rCts.CancelAfter(TimeSpan.FromSeconds(10));
-                                        var (rJson, rMap, rBus) = await atspi.GetMenuJsonForPidAsync(retryPid, rCts.Token);
+                                        var (rJson, rMap, rBus) = await atspi.GetMenuJsonForPidAsync(retryPid, rCts.Token,
+                                            preferredWindowId: retryWinId,
+                                            preferredWindowTitle: windowMonitor.GetWindowName((IntPtr)retryWinId));
                                         if (string.IsNullOrEmpty(rJson) || rJson == "{}")
                                         {
                                             // AT-SPI returned nothing — also check the DBus registrar.
@@ -874,7 +883,9 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                                                 {
                                                     using var wCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
                                                     wCts.CancelAfter(TimeSpan.FromSeconds(10));
-                                                    var (wJson, wMap, wBus) = await atspi.GetMenuJsonForPidAsync(retryPid, wCts.Token);
+                                                    var (wJson, wMap, wBus) = await atspi.GetMenuJsonForPidAsync(retryPid, wCts.Token,
+                                                        preferredWindowId: retryWinId,
+                                                        preferredWindowTitle: windowMonitor.GetWindowName((IntPtr)retryWinId));
                                                     if (string.IsNullOrEmpty(wJson) || wJson == "{}") { logger.LogDebug("  0x{W:X8}: ChildCount event — scan still no menu", retryWinId); return; }
                                                     logger.LogInformation("  0x{W:X8}: AT-SPI lazy menu appeared (event-driven) — showing menu", retryWinId);
                                                     exporter.UpdateAtSpi(wJson, atspi, wMap);

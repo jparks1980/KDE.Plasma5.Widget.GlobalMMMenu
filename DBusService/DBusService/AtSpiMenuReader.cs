@@ -148,9 +148,14 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
     /// Builds a menu JSON string for the window belonging to the given OS process ID.
     /// Also returns an ID→(busName,path) map so the exporter can route ExecuteItem calls.
     /// Returns (null, empty) if the app has no menu bar or is not registered on AT-SPI.
+    ///
+    /// <paramref name="preferredWindowId"/> and <paramref name="preferredWindowTitle"/> are
+    /// forwarded to <see cref="GetMenuJsonFromConnectionAsync"/> to select the correct window
+    /// node within multi-window apps that share a single AT-SPI connection (e.g. Brave).
     /// </summary>
     public async Task<(string? Json, Dictionary<int, (string BusName, string Path)> IdMap, string? AtSpiBusName)>
-        GetMenuJsonForPidAsync(uint pid, CancellationToken cancellationToken)
+        GetMenuJsonForPidAsync(uint pid, CancellationToken cancellationToken,
+                               uint preferredWindowId = 0, string? preferredWindowTitle = null)
     {
         var empty = (Json: (string?)null, IdMap: new Dictionary<int, (string, string)>(), AtSpiBusName: (string?)null);
         if (_atspiConnection == null || _atspiBusDaemon == null)
@@ -198,7 +203,8 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
             return empty;
         }
 
-        var (json, idMap) = await GetMenuJsonFromConnectionAsync(appBusName, cancellationToken);
+        var (json, idMap) = await GetMenuJsonFromConnectionAsync(
+            appBusName, cancellationToken, preferredWindowId, preferredWindowTitle);
         return (json, idMap, appBusName);
     }
 
@@ -273,11 +279,21 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
     /// Builds a menu JSON string directly from a known AT-SPI bus name.
     /// Walks: app root → window children → finds ROLE_MENU_BAR → serializes tree.
     /// Also returns the ID→(busName,path) map needed for execution routing.
-    /// For multi-window apps (e.g. Brave/Chromium) that share one AT-SPI connection,
-    /// prefers the window whose AT-SPI state includes StateActive (foreground focus).
+    ///
+    /// For multi-window apps (Brave, Chromium) that share one AT-SPI bus connection,
+    /// <paramref name="preferredWindowId"/> and <paramref name="preferredWindowTitle"/>
+    /// are used to pick the correct window's accessible tree so that idMap entries point
+    /// to the focused window's objects (ensuring ExecuteItem/DoAction fires on the right window).
+    ///
+    /// Matching strategies in priority order:
+    ///   1. "window-id" attribute (Chromium/Brave sets the X11 window ID here — reliable)
+    ///   2. Window title (AT-SPI accessible Name vs X11 WM_NAME — universal, no timing dependency)
+    ///   3. StateActive bit (timing-dependent — app must have processed the focus event already)
+    ///   4. First window with a menu bar (single-window apps / ultimate fallback)
     /// </summary>
     public async Task<(string? Json, Dictionary<int, (string BusName, string Path)> IdMap)>
-        GetMenuJsonFromConnectionAsync(string atspiBusName, CancellationToken cancellationToken)
+        GetMenuJsonFromConnectionAsync(string atspiBusName, CancellationToken cancellationToken,
+                                       uint preferredWindowId = 0, string? preferredWindowTitle = null)
     {
         var empty = (Json: (string?)null, IdMap: new Dictionary<int, (string, string)>());
         if (_atspiConnection == null) return empty;
@@ -290,14 +306,78 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
             var windows = await appRoot.GetChildrenAsync();
             logger.LogDebug("[AT-SPI] {Bus}: root has {N} app node(s)", atspiBusName, windows.Length);
 
-            // First pass: for multi-window apps all sharing the same AT-SPI connection
-            // (e.g. Brave, Chromium), pick the window that reports StateActive so we
-            // build the idMap from the *focused* window's accessible tree — not whichever
-            // window the AT-SPI daemon happens to list first.  The state update is driven
-            // by the same X11 focus event that triggered this scan, so it is already set
-            // by the time we reach this point.
             if (windows.Length > 1)
             {
+                // ── Strategies 1 & 2: deterministic matching (no timing dependency) ─────────
+                // For multi-window apps where all windows share one AT-SPI connection, we need to
+                // pick the window whose accessible tree corresponds to the focused X11 window so
+                // that every idMap entry points to that window's AT-SPI objects.  StateActive is
+                // unreliable here because the X11 focus event arrives at our service at the same
+                // time as it arrives at the app, creating a race between our scan and the app
+                // updating its AT-SPI state.
+                if (preferredWindowId != 0 || !string.IsNullOrEmpty(preferredWindowTitle))
+                {
+                    foreach (var (winBus, winPath) in windows)
+                    {
+                        if (cancellationToken.IsCancellationRequested) return empty;
+                        try
+                        {
+                            var winAcc = _atspiConnection.CreateProxy<IAtSpiAccessible>(winBus, winPath);
+                            bool matched = false;
+
+                            // Strategy 1: "window-id" attribute — Chromium/Brave stores the X11
+                            // window ID as a decimal string here.  No timing dependency.
+                            if (preferredWindowId != 0 && !matched)
+                            {
+                                try
+                                {
+                                    var attrs = await winAcc.GetAttributesAsync();
+                                    if (attrs.TryGetValue("window-id", out var wid) &&
+                                        uint.TryParse(wid, out var atSpiWid) &&
+                                        atSpiWid == preferredWindowId)
+                                    {
+                                        matched = true;
+                                        logger.LogDebug(
+                                            "[AT-SPI] {Bus}: matched 0x{W:X8} by window-id attribute",
+                                            atspiBusName, preferredWindowId);
+                                    }
+                                }
+                                catch { /* attribute read failed — try next strategy */ }
+                            }
+
+                            // Strategy 2: window title — AT-SPI accessible Name vs X11 WM_NAME.
+                            // Works for any app; fails only when two windows have identical titles.
+                            if (!string.IsNullOrEmpty(preferredWindowTitle) && !matched)
+                            {
+                                try
+                                {
+                                    var name = await winAcc.GetAsync<string>("Name");
+                                    if (!string.IsNullOrEmpty(name) &&
+                                        name.Equals(preferredWindowTitle, StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        matched = true;
+                                        logger.LogDebug(
+                                            "[AT-SPI] {Bus}: matched window by title '{T}'",
+                                            atspiBusName, preferredWindowTitle);
+                                    }
+                                }
+                                catch { /* name read failed — try next strategy */ }
+                            }
+
+                            if (!matched) continue;
+
+                            var winChildren = await winAcc.GetChildrenAsync();
+                            var result = await FindMenuBarInChildrenAsync(
+                                atspiBusName, winChildren, depth: 0, cancellationToken);
+                            if (result != null) return result.Value;
+                        }
+                        catch { /* unresponsive window node — skip */ }
+                    }
+                }
+
+                // ── Strategy 3: StateActive (timing-dependent fallback) ───────────────────
+                // The app may not have processed the focus event yet, but try anyway —
+                // this still catches re-focus events where the app's state is already set.
                 foreach (var (winBus, winPath) in windows)
                 {
                     if (cancellationToken.IsCancellationRequested) return empty;
@@ -313,7 +393,7 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
                         if (result != null)
                         {
                             logger.LogDebug(
-                                "[AT-SPI] {Bus}: using ACTIVE window {P}'s menu bar", atspiBusName, winPath);
+                                "[AT-SPI] {Bus}: using StateActive window {P}'s menu bar", atspiBusName, winPath);
                             return result.Value;
                         }
                     }
@@ -321,8 +401,8 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
                 }
             }
 
-            // Second pass (fallback): return the first window with a menu bar.
-            // Used for single-window apps or when no window reports StateActive yet.
+            // ── Strategy 4: first window with a menu bar ─────────────────────────────────
+            // Used for single-window apps, or when no other strategy matched.
             foreach (var (winBus, winPath) in windows)
             {
                 if (cancellationToken.IsCancellationRequested) return empty;
