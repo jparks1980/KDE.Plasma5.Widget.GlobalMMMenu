@@ -1273,40 +1273,44 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                     warmCts.CancelAfter(TimeSpan.FromSeconds(30));
                     try
                     {
-                        var pid = windowMonitor.GetWindowPid((IntPtr)windowId);
-                        if (pid == 0) goto skipIconCache;
+                        // Local async function replaces the previous goto-based early-exit pattern.
+                        async Task WarmIconCacheAsync()
+                        {
+                            var pid = windowMonitor.GetWindowPid((IntPtr)windowId);
+                            if (pid == 0) return;
 
-                        // Step 1: AT-SPI tree.
-                        var (atspiJson, atspiIdMap, atspiBusName) =
-                            await atspi.GetMenuJsonForPidAsync(pid, warmCts.Token);
-                        if (string.IsNullOrEmpty(atspiJson) || atspiJson == "{}") goto skipIconCache;
+                            // Step 1: AT-SPI tree.
+                            var (atspiJson, atspiIdMap, atspiBusName) =
+                                await atspi.GetMenuJsonForPidAsync(pid, warmCts.Token);
+                            if (string.IsNullOrEmpty(atspiJson) || atspiJson == "{}") return;
 
-                        // Step 2: DBus full layout (3-depth AboutToShow pass).
-                        var (dbJson, _) = await FetchDbusMenuJsonAsync(connection, service, path, warmCts.Token);
-                        if (dbJson == null) goto skipIconCache;
+                            // Step 2: DBus full layout (3-depth AboutToShow pass).
+                            var (dbJson, _) = await FetchDbusMenuJsonAsync(connection, service, path, warmCts.Token);
+                            if (dbJson == null) return;
 
-                        // Step 3: Merge icons + lazy submenu children.
-                        var merged = AtSpiMenuReader.MergeDbusIconsIntoAtSpiJson(atspiJson, dbJson);
-                        var postMerge = merged ?? atspiJson;
+                            // Step 3: Merge icons + lazy submenu children.
+                            var merged = AtSpiMenuReader.MergeDbusIconsIntoAtSpiJson(atspiJson, dbJson);
+                            var postMerge = merged ?? atspiJson;
 
-                        // Step 4: Enrich with keyboard shortcuts.
-                        var enriched = await atspi.EnrichMenuJsonAsync(postMerge, atspiIdMap, warmCts.Token);
-                        var final = enriched ?? postMerge;
+                            // Step 4: Enrich with keyboard shortcuts.
+                            var enriched = await atspi.EnrichMenuJsonAsync(postMerge, atspiIdMap, warmCts.Token);
+                            var final = enriched ?? postMerge;
 
-                        menuCache[windowId] = final;
+                            menuCache[windowId] = final;
 
-                        // Store the source record with the full idMap so re-focus hits cache.
-                        var src = new WindowMenuSource(
-                            MenuSourceType.AtSpi,
-                            AtSpiBusName: atspiBusName,
-                            DbusService:  service,
-                            DbusPath:     path,
-                            IdMap:        atspiIdMap);
-                        windowSources[windowId] = src;
+                            // Store the source record with the full idMap so re-focus hits cache.
+                            var src = new WindowMenuSource(
+                                MenuSourceType.AtSpi,
+                                AtSpiBusName: atspiBusName,
+                                DbusService:  service,
+                                DbusPath:     path,
+                                IdMap:        atspiIdMap);
+                            windowSources[windowId] = src;
 
-                        logger.LogInformation(
-                            "[Prefetch] 0x{W:X8}: icon cache warmed ({Len} chars)", windowId, final.Length);
-                        skipIconCache:;
+                            logger.LogInformation(
+                                "[Prefetch] 0x{W:X8}: icon cache warmed ({Len} chars)", windowId, final.Length);
+                        }
+                        await WarmIconCacheAsync();
                     }
                     catch (Exception ex)
                     {
@@ -1887,18 +1891,8 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
         // The app won't populate a submenu's children until AboutToShow is called for it.
         // Depth-1 priming (Stage 3) covers File/Edit/View/… but not their children.
         // This pass covers all IDs reachable at depth 2 so items like "Create New" get populated.
-        static IEnumerable<int> AllIdsInChildren(object[] children)
-        {
-            foreach (var r in children)
-                if (r is ValueTuple<int, IDictionary<string, object>, object[]> n)
-                {
-                    yield return n.Item1;
-                    foreach (var id in AllIdsInChildren(n.Item3))
-                        yield return id;
-                }
-        }
         var (_, depth2Layout) = await menu.GetLayoutAsync(0, 2, []);
-        foreach (var d2Id in AllIdsInChildren(depth2Layout.Children))
+        foreach (var d2Id in AllMenuItemIds(depth2Layout.Children))
         {
             var capturedId = d2Id;
             _ = menu.AboutToShowAsync(capturedId).ContinueWith(t =>
@@ -1944,6 +1938,22 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
         public string Service { get; } = service;
     }
 
+    /// <summary>
+    /// Recursively collects all item IDs from a raw dbusmenu children array.
+    /// Shared by <see cref="FetchAndLogMenuAsync"/> and <see cref="FetchDbusMenuJsonAsync"/>
+    /// to avoid duplicating the iterator logic.
+    /// </summary>
+    private static IEnumerable<int> AllMenuItemIds(object[] children)
+    {
+        foreach (var r in children)
+            if (r is ValueTuple<int, IDictionary<string, object>, object[]> n)
+            {
+                yield return n.Item1;
+                foreach (var id in AllMenuItemIds(n.Item3))
+                    yield return id;
+            }
+    }
+
     // Tmds.DBus deserializes each dbusmenu layout node as ValueTuple<int, IDictionary<string,object>, object[]>
     private static Dictionary<string, object?> BuildMenuNode(int id, IDictionary<string, object> props, object[] rawChildren)
     {
@@ -1981,17 +1991,6 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
     private static async Task<(string? Json, IDbusMenu? Proxy)> FetchDbusMenuJsonAsync(
         Connection connection, string service, string path, CancellationToken ct)
     {
-        // Collects all IDs at every depth of the given raw children array.
-        static IEnumerable<int> AllIds(object[] children)
-        {
-            foreach (var r in children)
-                if (r is ValueTuple<int, IDictionary<string, object>, object[]> n)
-                {
-                    yield return n.Item1;
-                    foreach (var id in AllIds(n.Item3))
-                        yield return id;
-                }
-        }
         try
         {
             var proxy = connection.CreateProxy<IDbusMenu>(service, new ObjectPath(path));
@@ -2006,7 +2005,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                 await Task.Delay(50, ct);
 
             var (_, depth2) = await proxy.GetLayoutAsync(0, 2, []);
-            foreach (var id in AllIds(depth2.Children))
+            foreach (var id in AllMenuItemIds(depth2.Children))
                 _ = proxy.AboutToShowAsync(id);
             if (depth2.Children.Length > 0)
                 await Task.Delay(50, ct);
