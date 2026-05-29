@@ -273,6 +273,8 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
     /// Builds a menu JSON string directly from a known AT-SPI bus name.
     /// Walks: app root → window children → finds ROLE_MENU_BAR → serializes tree.
     /// Also returns the ID→(busName,path) map needed for execution routing.
+    /// For multi-window apps (e.g. Brave/Chromium) that share one AT-SPI connection,
+    /// prefers the window whose AT-SPI state includes StateActive (foreground focus).
     /// </summary>
     public async Task<(string? Json, Dictionary<int, (string BusName, string Path)> IdMap)>
         GetMenuJsonFromConnectionAsync(string atspiBusName, CancellationToken cancellationToken)
@@ -287,6 +289,40 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
 
             var windows = await appRoot.GetChildrenAsync();
             logger.LogDebug("[AT-SPI] {Bus}: root has {N} app node(s)", atspiBusName, windows.Length);
+
+            // First pass: for multi-window apps all sharing the same AT-SPI connection
+            // (e.g. Brave, Chromium), pick the window that reports StateActive so we
+            // build the idMap from the *focused* window's accessible tree — not whichever
+            // window the AT-SPI daemon happens to list first.  The state update is driven
+            // by the same X11 focus event that triggered this scan, so it is already set
+            // by the time we reach this point.
+            if (windows.Length > 1)
+            {
+                foreach (var (winBus, winPath) in windows)
+                {
+                    if (cancellationToken.IsCancellationRequested) return empty;
+                    try
+                    {
+                        var winAcc = _atspiConnection.CreateProxy<IAtSpiAccessible>(winBus, winPath);
+                        var state  = await winAcc.GetStateAsync();
+                        if (state.Length == 0 || (state[0] & StateActive) == 0) continue;
+
+                        var winChildren = await winAcc.GetChildrenAsync();
+                        var result = await FindMenuBarInChildrenAsync(
+                            atspiBusName, winChildren, depth: 0, cancellationToken);
+                        if (result != null)
+                        {
+                            logger.LogDebug(
+                                "[AT-SPI] {Bus}: using ACTIVE window {P}'s menu bar", atspiBusName, winPath);
+                            return result.Value;
+                        }
+                    }
+                    catch { /* unresponsive window node — skip */ }
+                }
+            }
+
+            // Second pass (fallback): return the first window with a menu bar.
+            // Used for single-window apps or when no window reports StateActive yet.
             foreach (var (winBus, winPath) in windows)
             {
                 if (cancellationToken.IsCancellationRequested) return empty;
