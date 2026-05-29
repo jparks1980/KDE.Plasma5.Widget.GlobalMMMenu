@@ -126,7 +126,7 @@ public sealed class WaylandWindowMonitor : IActiveWindowMonitor, IKWinWindowCall
     /// <c>workspace.clientActivated</c> fires.  Fires <see cref="ActiveWindowChanged"/>
     /// on the monitor so the <c>Worker</c> can handle it identically to X11.
     /// </summary>
-    public Task WindowActivatedAsync(string windowId, string pid, string caption)
+    public Task WindowActivatedAsync(string windowId, string pid, string caption, string internalId)
     {
         if (!uint.TryParse(windowId, out var rawId)) return Task.CompletedTask;
         uint.TryParse(pid, out var pidVal);
@@ -137,18 +137,30 @@ public sealed class WaylandWindowMonitor : IActiveWindowMonitor, IKWinWindowCall
             // X11 or XWayland window — use the real window ID directly.
             id = rawId;
         }
+        else if (!string.IsNullOrEmpty(internalId))
+        {
+            // Native Wayland window: KWin reports windowId=0 but provides a stable UUID
+            // (internalId) that is unique per window.  Hash the UUID to a uint with bit 31
+            // set so it can't collide with real X11 IDs (which top out around 0x07FFFFFF).
+            // Using the FNV-1a 32-bit hash on the raw string bytes is deterministic and
+            // produces good distribution for UUID inputs.
+            uint hash = 2166136261u;
+            foreach (var c in internalId)
+            {
+                hash ^= (byte)c;
+                hash *= 16777619u;
+            }
+            id = 0x80000000u | (hash & 0x7FFFFFFFu);
+        }
         else if (pidVal != 0)
         {
-            // Native Wayland window: KWin 5 reports windowId as undefined/0 for these.
-            // c.internalId is a UUID string (not numeric), so we use pid instead.
-            // Synthesise a stable ID with bit 31 set to avoid colliding with X11 IDs.
-            // Multiple windows of the same app share the pid → same synthetic ID,
-            // which is intentional: they share the same global menu.
+            // Fallback: no internalId — synthesise from PID (old behaviour).
+            // This path is only hit by very old KWin builds that don't expose internalId.
             id = 0x80000000u | (pidVal & 0x7FFFFFFFu);
         }
         else
         {
-            _logger.LogDebug("[Wayland] clientActivated: windowId=0 and pid=0, ignoring");
+            _logger.LogDebug("[Wayland] clientActivated: windowId=0, no internalId, pid=0 — ignoring");
             return Task.CompletedTask;
         }
 
@@ -164,8 +176,8 @@ public sealed class WaylandWindowMonitor : IActiveWindowMonitor, IKWinWindowCall
         }
 
         var (svc, path) = GetWindowMenuInfo((IntPtr)id);
-        _logger.LogInformation("[Wayland] clientActivated windowId={RawId} id=0x{I:X8} pid={P} caption={C}",
-            rawId, id, pidVal, caption);
+        _logger.LogInformation("[Wayland] clientActivated windowId={RawId} id=0x{I:X8} pid={P} caption={C} iid={IId}",
+            rawId, id, pidVal, caption, internalId);
         ActiveWindowChanged?.Invoke((id, svc, path));
         return Task.CompletedTask;
     }
@@ -251,19 +263,23 @@ public sealed class WaylandWindowMonitor : IActiveWindowMonitor, IKWinWindowCall
         // c.caption    = window title string — used for display and fallback matching.
         //
         // Strategy: pass (c.windowId || 0) as wid — gives 0 for Wayland-native windows.
-        // C# handles wid==0 by synthesising a pid-based ID (0x80000000|pid).
+        // Also pass c.internalId (a stable UUID string like "{4898dcbd-...}") — unique
+        // per window.  C# uses it to synthesise a stable per-window ID from its hash when
+        // wid==0, replacing the old pid-based ID that mapped every window of the same app
+        // to the same synthetic ID.
         // All values passed as strings to avoid int32/uint32 D-Bus type mismatch.
         // Tmds.DBus strips "Async" from WindowActivatedAsync → D-Bus method "WindowActivated".
         // Use $@"..." (verbatim interpolated): "" → literal quote, {{ / }} → literal brace.
         var script = $@"workspace.clientActivated.connect(function(c) {{
     if (!c) return;
     // windowId is a JS number for X11/XWayland, undefined for native Wayland.
-    // Use || 0 to normalise undefined → 0; do NOT use internalId (it is a UUID string).
+    // internalId is a UUID string unique per window — use it for native Wayland.
     var wid = c.windowId || 0;
+    var iid = (typeof c.internalId === 'string') ? c.internalId : '';
     callDBus(
         ""com.kde.GlobalMMMenu"", ""{CallbackPath}"",
         ""com.kde.GlobalMMMenu.WindowMonitor"", ""WindowActivated"",
-        String(wid), String(c.pid || 0), String(c.caption || '')
+        String(wid), String(c.pid || 0), String(c.caption || ''), iid
     );
 }});
 ";

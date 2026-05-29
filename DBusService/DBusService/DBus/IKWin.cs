@@ -73,7 +73,10 @@ public interface IKWinScripting : IDBusObject
 /// Registered on the session bus as <c>com.kde.GlobalMMMenu</c> at path
 /// <c>/com/kde/globalmmmenu/windowmonitor</c>.
 ///
-/// The KWin script invokes <c>WindowActivated(windowId, pid, caption)</c> on this interface.
+/// The KWin script invokes <c>WindowActivated(windowId, pid, caption, internalId)</c> on this interface.
+/// <c>internalId</c> is the KWin UUID string (e.g. "{4898dcbd-...}") — unique per window,
+/// stable for the window's lifetime, and present even for native Wayland windows where
+/// <c>windowId</c> is reported as 0.
 /// All arguments are passed as strings from the script to avoid int32/uint32 D-Bus type
 /// signature mismatches that occur when KWin JS passes numeric values via callDBus.
 /// </summary>
@@ -86,5 +89,5 @@ public interface IKWinWindowCallback : IDBusObject
     /// <paramref name="pid"/>      is <c>String(client.pid)</c>      — passed as string to avoid D-Bus type mismatch.
     /// <paramref name="caption"/>  is <c>String(client.caption)</c>  — window title for logging and fallback matching.
     /// </summary>
-    Task WindowActivatedAsync(string windowId, string pid, string caption);
+    Task WindowActivatedAsync(string windowId, string pid, string caption, string internalId);
 }
