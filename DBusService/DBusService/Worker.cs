@@ -24,6 +24,12 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
     private MenuLogMode _menuLogMode = MenuLogMode.Limited; // default until ExecuteAsync reads config
     private MenuLogMode GetMenuLogMode() => _menuLogMode;
 
+    // Tracks which dbusmenu path has been claimed by which window, keyed as "service|path".
+    // Used to prevent concurrent window discovery (e.g. 3 Brave windows focused in quick
+    // succession) from racing and all picking the same /com/canonical/menu/1 path before
+    // any of them has written to windowSources.  TryAdd is atomic: the first window wins.
+    private readonly ConcurrentDictionary<string, uint> _claimedMenuPaths = new();
+
     // D-Bus bus-name list cache. ListNamesAsync does a full D-Bus round-trip and can be called
     // from FindMenuByPidAsync, ScanConnectionsForMenusAsync, and the prefetch loop in rapid
     // succession during startup or retry storms. Cache for 3 s to avoid redundant round-trips.
@@ -1714,6 +1720,20 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
             // Task.WhenAny so the timeout is actually enforced.
             foreach (var candidatePath in candidatePaths)
             {
+                // Atomic claim check: for multi-window apps (Brave/Chromium) multiple
+                // discovery tasks run concurrently and all see the same candidate list.
+                // TryAdd atomically reserves the path for this window; if another window
+                // already claimed it, skip to the next candidate.
+                var claimKey = $"{name}|{candidatePath}";
+                var alreadyClaimed = _claimedMenuPaths.TryGetValue(claimKey, out var claimedBy)
+                                     && claimedBy != windowId;
+                if (alreadyClaimed)
+                {
+                    logger.LogInformation(
+                        "  0x{W:X8}: skipping {P} — already claimed by 0x{C:X8}", windowId, candidatePath, claimedBy);
+                    continue;
+                }
+
                 try
                 {
                     // Use AboutToShowAsync(0) as a lightweight probe.
@@ -1734,6 +1754,19 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                             logger.LogInformation("  0x{W:X8}: PID discovery found menu on {N} at {P} (AboutToShow={R})", windowId, name, candidatePath, probeTask.Result);
                         else
                             logger.LogInformation("  0x{W:X8}: PID discovery found menu on {N} at {P} (object exists, err={E})", windowId, name, candidatePath, probeTask.Exception?.InnerException?.Message);
+
+                        // Register the claim atomically. If another window won the race for this
+                        // exact path, fall through to try the next candidate instead.
+                        if (!_claimedMenuPaths.TryAdd(claimKey, windowId))
+                        {
+                            if (_claimedMenuPaths.TryGetValue(claimKey, out var winner) && winner != windowId)
+                            {
+                                logger.LogInformation(
+                                    "  0x{W:X8}: lost race for {P} to 0x{C:X8} — trying next", windowId, candidatePath, winner);
+                                continue;
+                            }
+                        }
+
                         registrar.StoreResolved(windowId, name, candidatePath);
                         return (name, candidatePath);
                     }
