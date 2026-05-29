@@ -20,4 +20,13 @@ public interface IGlobalMenuService : IDBusObject
     /// com.canonical.dbusmenu proxy.
     /// </summary>
     Task ExecuteItemAsync(int itemId);
+
+    /// <summary>
+    /// Called by the C++ plugin when a native menu popup opens or closes.
+    /// While menuOpen=true, the service freezes its active menu proxy so that
+    /// transient focus changes (e.g. Brave re-focusing its "last internal window"
+    /// when the panel grabs Wayland focus) do not overwrite the proxy before the
+    /// user's menu item click is dispatched via ExecuteItem.
+    /// </summary>
+    Task SetMenuOpenAsync(bool menuOpen);
 }

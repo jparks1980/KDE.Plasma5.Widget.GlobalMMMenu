@@ -78,6 +78,10 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
         };
         logger.LogInformation("Menu log mode: {M}", _menuLogMode);
 
+        exporter.ShowDebugMenu = configuration.GetValue<bool>("GlobalMMMenu:ShowDebugMenu", false);
+        if (exporter.ShowDebugMenu)
+            logger.LogInformation("Debug menu item: enabled");
+
         await connection.RegisterServiceAsync("com.kde.GlobalMMMenu");
         await connection.RegisterObjectAsync(exporter);
         logger.LogInformation("Registered com.kde.GlobalMMMenu on session bus");
@@ -413,6 +417,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
 
                 logger.LogInformation("Active window → 0x{WindowId:X8}  [{Name}]",
                     windowId, windowMonitor.GetWindowName((IntPtr)windowId) ?? "?");
+                exporter.SetDebugContext(windowId);
                 exporter.Update("{}", null);
 
                 // Resolve service + path (priority order):
@@ -454,6 +459,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                             var fWinId = windowId; var fSrc = knownSrc;
                             var fWinPid = windowMonitor.GetWindowPid((IntPtr)windowId);
                             var fWinTitle = windowMonitor.GetWindowName((IntPtr)windowId);
+                            var (fGx, fGy) = windowMonitor.GetWindowGeometry((IntPtr)windowId);
                             _ = Task.Run(async () =>
                             {
                                 try
@@ -468,7 +474,8 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                                         (freshJson, freshMap, freshAtSpiBusName) = await atspi.GetMenuJsonForPidAsync(
                                             fWinPid, rCts.Token,
                                             preferredWindowId: fWinId,
-                                            preferredWindowTitle: fWinTitle);
+                                            preferredWindowTitle: fWinTitle,
+                                            preferredGx: fGx, preferredGy: fGy);
                                     }
                                     else
                                     {
@@ -476,7 +483,8 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                                         (freshJson, freshMap) = await atspi.GetMenuJsonFromConnectionAsync(
                                             fSrc.AtSpiBusName!, rCts.Token,
                                             preferredWindowId: fWinId,
-                                            preferredWindowTitle: fWinTitle);
+                                            preferredWindowTitle: fWinTitle,
+                                            preferredGx: fGx, preferredGy: fGy);
                                         freshAtSpiBusName = fSrc.AtSpiBusName;
                                     }
                                     if (string.IsNullOrEmpty(freshJson) || freshJson == "{}") return;
@@ -489,6 +497,10 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                                             connection, fSrc.DbusService!, fSrc.DbusPath!, mCts.Token);
                                         if (dbJson != null && dbProxy != null)
                                         {
+                                            // Do NOT pass freshMap as idMapToUpdate: keeping AT-SPI paths in the map
+                                            // ensures ExecuteItem uses DoAction (per-window) not dbusmenu EventAsync
+                                            // (which routes to Brave's focused window — wrong when multiple windows share
+                                            // the same dbusmenu path such as /com/canonical/menu/1).
                                             var merged = AtSpiMenuReader.MergeDbusIconsIntoAtSpiJson(freshJson, dbJson);
                                             if (merged != null)
                                             {
@@ -533,6 +545,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                         {
                             var fastPid = windowMonitor.GetWindowPid((IntPtr)windowId);
                             var fastTitle = windowMonitor.GetWindowName((IntPtr)windowId);
+                            var (fastGx, fastGy) = windowMonitor.GetWindowGeometry((IntPtr)windowId);
                             string? fastAtSpiBus;
                             Dictionary<int, (string BusName, string Path)> fMap;
                             string? fJson;
@@ -542,7 +555,8 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                                 (fJson, fMap, tmpBus) = await atspi.GetMenuJsonForPidAsync(
                                     fastPid, fastCts.Token,
                                     preferredWindowId: windowId,
-                                    preferredWindowTitle: fastTitle);
+                                    preferredWindowTitle: fastTitle,
+                                    preferredGx: fastGx, preferredGy: fastGy);
                                 fastAtSpiBus = tmpBus ?? knownSrc.AtSpiBusName;
                             }
                             else
@@ -550,7 +564,8 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                                 (fJson, fMap) = await atspi.GetMenuJsonFromConnectionAsync(
                                     knownSrc.AtSpiBusName!, fastCts.Token,
                                     preferredWindowId: windowId,
-                                    preferredWindowTitle: fastTitle);
+                                    preferredWindowTitle: fastTitle,
+                                    preferredGx: fastGx, preferredGy: fastGy);
                                 fastAtSpiBus = knownSrc.AtSpiBusName;
                             }
                             if (!string.IsNullOrEmpty(fJson) && fJson != "{}")
@@ -642,8 +657,12 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                             var (atspiJson, atspiIdMap, atspiBusName) =
                                 await atspi.GetMenuJsonForPidAsync(atspiPid, atspiFirstCts.Token,
                                     preferredWindowId: windowId,
-                                    preferredWindowTitle: windowMonitor.GetWindowName((IntPtr)windowId));
+                                    preferredWindowTitle: windowMonitor.GetWindowName((IntPtr)windowId),
+                                    preferredGx: windowMonitor.GetWindowGeometry((IntPtr)windowId).Gx,
+                                    preferredGy: windowMonitor.GetWindowGeometry((IntPtr)windowId).Gy);
                             firstScanBusName = atspiBusName; // keep for event-driven retry below
+                            if (!string.IsNullOrEmpty(atspiBusName))
+                                exporter.SetDebugContext(windowId, atspiBusName);
                             if (!string.IsNullOrEmpty(atspiJson) && atspiJson != "{}")
                             {
                                 logger.LogInformation(
@@ -678,7 +697,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                                         else
                                         {
                                             (dbSvc, dbPath) = await FindMenuByPidAsync(
-                                                connection, dbus, windowMonitor, registrarImpl, windowSources, bgWinId, null, bgCts.Token);
+                                                connection, dbus, windowMonitor, registrarImpl, windowSources, bgWinId, null, bgCts.Token, atspi);
                                         }
 
                                         if (!string.IsNullOrEmpty(dbSvc) && !string.IsNullOrEmpty(dbPath) && dbPath != "/")
@@ -689,6 +708,10 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                                                 connection, dbSvc, dbPath, bgCts.Token);
                                             if (dbJson != null && dbMenu != null)
                                             {
+                                                // Do NOT remap bgIdMap to dbusmenu entries: preserve AT-SPI paths so
+                                                // ExecuteItem uses DoAction (specific to this window's accessible tree)
+                                                // rather than dbusmenu EventAsync (which Brave routes to its focused
+                                                // internal window — often the wrong one when a popup stole keyboard focus).
                                                 var merged = AtSpiMenuReader.MergeDbusIconsIntoAtSpiJson(bgAtSpiJson, dbJson);
                                                 if (merged != null)
                                                 {
@@ -825,7 +848,9 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                                         rCts.CancelAfter(TimeSpan.FromSeconds(10));
                                         var (rJson, rMap, rBus) = await atspi.GetMenuJsonForPidAsync(retryPid, rCts.Token,
                                             preferredWindowId: retryWinId,
-                                            preferredWindowTitle: windowMonitor.GetWindowName((IntPtr)retryWinId));
+                                            preferredWindowTitle: windowMonitor.GetWindowName((IntPtr)retryWinId),
+                                            preferredGx: windowMonitor.GetWindowGeometry((IntPtr)retryWinId).Gx,
+                                            preferredGy: windowMonitor.GetWindowGeometry((IntPtr)retryWinId).Gy);
                                         if (string.IsNullOrEmpty(rJson) || rJson == "{}")
                                         {
                                             // AT-SPI returned nothing — also check the DBus registrar.
@@ -848,7 +873,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                                                         dbsCts.CancelAfter(TimeSpan.FromSeconds(8));
                                                         (retrySvc, retryPath) = await FindMenuByPidAsync(
                                                             connection, dbus, windowMonitor, registrarImpl,
-                                                            windowSources, retryWinId, null, dbsCts.Token);
+                                                            windowSources, retryWinId, null, dbsCts.Token, atspi);
                                                     }
                                                     finally { retryPidSemaphore.Release(); }
                                                 }
@@ -930,7 +955,9 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                                                     wCts.CancelAfter(TimeSpan.FromSeconds(10));
                                                     var (wJson, wMap, wBus) = await atspi.GetMenuJsonForPidAsync(retryPid, wCts.Token,
                                                         preferredWindowId: retryWinId,
-                                                        preferredWindowTitle: windowMonitor.GetWindowName((IntPtr)retryWinId));
+                                                        preferredWindowTitle: windowMonitor.GetWindowName((IntPtr)retryWinId),
+                                                        preferredGx: windowMonitor.GetWindowGeometry((IntPtr)retryWinId).Gx,
+                                                        preferredGy: windowMonitor.GetWindowGeometry((IntPtr)retryWinId).Gy);
                                                     if (string.IsNullOrEmpty(wJson) || wJson == "{}") { logger.LogDebug("  0x{W:X8}: ChildCount event — scan still no menu", retryWinId); return; }
                                                     logger.LogInformation("  0x{W:X8}: AT-SPI lazy menu appeared (event-driven) — showing menu", retryWinId);
                                                     exporter.UpdateAtSpi(wJson, atspi, wMap);
@@ -1021,9 +1048,27 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                 var (rs, rp) = registrarImpl.TryGetMenu(windowId);
                 if (!string.IsNullOrEmpty(rs) && !string.IsNullOrEmpty(rp) && rp != "/")
                 {
-                    service = rs;
-                    path    = rp;
-                    logger.LogInformation("  0x{W:X8}: menu from registrar ({S})", windowId, rs);
+                    // Guard: check if another window already claimed this path.
+                    // Brave registers multiple windows to the same /com/canonical/menu/1 path.
+                    // If we accepted it here we'd assign two windows the same dbusmenu endpoint,
+                    // causing clicks from one window to execute on the other's Brave instance.
+                    var claimKey = $"{rs}|{rp}";
+                    var claimedByOther = _claimedMenuPaths.TryGetValue(claimKey, out var claimOwner)
+                                        && claimOwner != windowId;
+                    if (claimedByOther)
+                    {
+                        logger.LogInformation(
+                            "  0x{W:X8}: registrar path {P} already claimed by 0x{C:X8} — falling through to PID discovery",
+                            windowId, rp, claimOwner);
+                        // Leave service/path as-is (from x11Service/x11Path, likely empty) so
+                        // PID discovery runs below and finds the correct unclaimed path.
+                    }
+                    else
+                    {
+                        service = rs;
+                        path    = rp;
+                        logger.LogInformation("  0x{W:X8}: menu from registrar ({S})", windowId, rs);
+                    }
                 }
                 else if (!string.IsNullOrEmpty(service) && !string.IsNullOrEmpty(path) && path != "/")
                 {
@@ -1054,7 +1099,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                 if (string.IsNullOrEmpty(service) || string.IsNullOrEmpty(path) || path == "/")
                 {
                     var knownPath = (string.IsNullOrEmpty(path) || path == "/") ? null : path;
-                    var (ds, dp) = await FindMenuByPidAsync(connection, dbus, windowMonitor, registrarImpl, windowSources, windowId, knownPath, windowCts!.Token);
+                    var (ds, dp) = await FindMenuByPidAsync(connection, dbus, windowMonitor, registrarImpl, windowSources, windowId, knownPath, windowCts!.Token, atspi);
                     if (!string.IsNullOrEmpty(ds) && !string.IsNullOrEmpty(dp))
                     {
                         service = ds;
@@ -1132,6 +1177,20 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                 cts.CancelAfter(TimeSpan.FromSeconds(3));
 
                 var menuPath   = new ObjectPath(path);
+
+                // Pre-seed _activeMenu to the correct proxy IMMEDIATELY — FetchMenuAsync won't
+                // call exporter.Update for ~100ms+ (GetLayout + AboutToShow round-trips + delays).
+                // If the user clicks a menu item during that gap, _activeMenu still points to the
+                // PREVIOUS window's proxy and the Event fires on the wrong dbusmenu path.
+                // Fix: create the proxy and call exporter.Update now with cached JSON (if available)
+                // so routing is correct from the moment we know the path. FetchMenuAsync overwrites
+                // with fresh JSON once it completes.
+                {
+                    var preSeedProxy = connection.CreateProxy<IDbusMenu>(service, menuPath);
+                    var preSeedJson  = menuCache.TryGetValue(windowId, out var cached) ? cached : "{}";
+                    exporter.Update(preSeedJson, preSeedProxy, path);
+                }
+
                 var capturedWindowId = windowId;
                 var processTask = FetchMenuAsync(
                     connection, service, menuPath, stoppingToken, windowCts!.Token,
@@ -1195,7 +1254,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                     else
                     {
                         // Fall back to PID scan (knownPath=null → tries default format).
-                        (ns, np) = await FindMenuByPidAsync(connection, dbus, windowMonitor, registrarImpl, windowSources, windowId, null, windowCts!.Token);
+                        (ns, np) = await FindMenuByPidAsync(connection, dbus, windowMonitor, registrarImpl, windowSources, windowId, null, windowCts!.Token, atspi);
                     }
                     if (!string.IsNullOrEmpty(ns) && !string.IsNullOrEmpty(np))
                     {
@@ -1311,7 +1370,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                 try
                 {
                     var (service, path) = await FindMenuByPidAsync(
-                        connection, dbus, windowMonitor, registrar, windowSources, windowId, null, discoveryCts.Token);
+                        connection, dbus, windowMonitor, registrar, windowSources, windowId, null, discoveryCts.Token, atspi);
                     if (string.IsNullOrEmpty(service) || string.IsNullOrEmpty(path))
                         continue;
 
@@ -1345,6 +1404,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                             if (dbJson == null) return;
 
                             // Step 3: Merge icons + lazy submenu children.
+                            // Do NOT pass atspiIdMap as idMapToUpdate — preserve AT-SPI paths for execution.
                             var merged = AtSpiMenuReader.MergeDbusIconsIntoAtSpiJson(atspiJson, dbJson);
                             var postMerge = merged ?? atspiJson;
 
@@ -1588,7 +1648,8 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
         ConcurrentDictionary<uint, WindowMenuSource> windowSources,
         uint windowId,
         string? knownMenuPath,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        AtSpiMenuReader? atspi = null)
     {
         var pid = windowMonitor.GetWindowPid((IntPtr)windowId);
         if (pid == 0)
@@ -1685,6 +1746,46 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                 if (introspectedPaths.Length > 0)
                     logger.LogInformation("  0x{W:X8}: introspect found {C} path(s) on {N}: [{P}]",
                         windowId, introspectedPaths.Length, name, string.Join(", ", introspectedPaths));
+
+                // ── AT-SPI rank-based path selection ─────────────────────────────────────
+                // For Chromium-based apps (Brave, Chrome) with a single D-Bus connection
+                // serving all windows, both AT-SPI accessible node IDs and dbusmenu path
+                // suffix numbers increment in window-creation order. Match the focused
+                // window's title to the AT-SPI tree to get its creation-order rank, then
+                // reorder introspectedPaths to put the rank-matched path first so it is
+                // claimed before the incorrectly-ordered first-unclaimed path.
+                if (atspi != null && introspectedPaths.Length > 1)
+                {
+                    var caption = windowMonitor.GetWindowName((IntPtr)windowId);
+                    var (rankGx, rankGy) = windowMonitor.GetWindowGeometry((IntPtr)windowId);
+                    {
+                        using var rankCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                        rankCts.CancelAfter(TimeSpan.FromMilliseconds(2500));
+                        var rank = await atspi.GetDbusmenuRankForWindowAsync(pid, caption, rankGx, rankGy, rankCts.Token);
+                        if (rank > 0)
+                        {
+                            // Sort all introspected paths by their numeric suffix (creation order),
+                            // then put the rank-th path first so the probe loop claims it.
+                            var byNum = introspectedPaths
+                                .Select(p => {
+                                    var sep = p.LastIndexOf('/');
+                                    var numStr = sep >= 0 ? p[(sep + 1)..] : "";
+                                    return (Path: p, Num: int.TryParse(numStr, out var n) ? n : int.MaxValue);
+                                })
+                                .OrderBy(x => x.Num)
+                                .Select(x => x.Path)
+                                .ToArray();
+                            if (rank <= byNum.Length)
+                            {
+                                var preferred = byNum[rank - 1];
+                                introspectedPaths = [preferred, .. byNum.Where(p => p != preferred)];
+                                logger.LogInformation(
+                                    "  0x{W:X8}: AT-SPI rank={R}/{Total} → preferred path {P}",
+                                    windowId, rank, byNum.Length, preferred);
+                            }
+                        }
+                    }
+                }
 
                 var fallbackPaths = new[]
                 {
@@ -1864,8 +1965,9 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
         Action? onPersistentLayoutFailure = null)
     {
         var menu = connection.CreateProxy<IDbusMenu>(service, menuPath);
+        var menuPathStr = menuPath.ToString();
 
-        await LogMenuJsonAsync(menu, service, stoppingToken);
+        await LogMenuJsonAsync(menu, service, menuPathStr, stoppingToken);
 
         // Track consecutive LayoutUpdated re-fetch failures. If the same menu endpoint
         // repeatedly fails GetLayout (e.g. a broken dbusmenu implementation that sends
@@ -1889,7 +1991,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                     cts.CancelAfter(TimeSpan.FromSeconds(3));
                     try
                     {
-                        await FetchAndLogMenuAsync(menu, service, stoppingToken, cts.Token);
+                        await FetchAndLogMenuAsync(menu, service, menuPathStr, stoppingToken, cts.Token);
                         consecutiveLayoutFailures = 0; // reset on success
                     }
                     catch (Exception ex) when (!stoppingToken.IsCancellationRequested && !windowToken.IsCancellationRequested)
@@ -1924,12 +2026,12 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                 service, ex.Message)));
     }
 
-    private async Task LogMenuJsonAsync(IDbusMenu menu, string service, CancellationToken stoppingToken)
+    private async Task LogMenuJsonAsync(IDbusMenu menu, string service, string menuPath, CancellationToken stoppingToken)
     {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
         cts.CancelAfter(TimeSpan.FromSeconds(3));
 
-        var fetchTask = FetchAndLogMenuAsync(menu, service, stoppingToken, cts.Token);
+        var fetchTask = FetchAndLogMenuAsync(menu, service, menuPath, stoppingToken, cts.Token);
         await Task.WhenAny(fetchTask, Task.Delay(Timeout.Infinite, cts.Token));
 
         if (!fetchTask.IsCompleted)
@@ -1951,7 +2053,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
         catch (Exception ex) { logger.LogWarning(ex, "  [{Service}] Failed to fetch menu layout", service); }
     }
 
-    private async Task FetchAndLogMenuAsync(IDbusMenu menu, string service, CancellationToken stoppingToken, CancellationToken timeoutToken)
+    private async Task FetchAndLogMenuAsync(IDbusMenu menu, string service, string menuPath, CancellationToken stoppingToken, CancellationToken timeoutToken)
     {
         try
         {
@@ -2016,7 +2118,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                 : json;
             logger.LogInformation("  [{Service}] Menu:\n{Json}", service, display);
         }
-        exporter.Update(json, menu);
+        exporter.Update(json, menu, menuPath);
         } // end try
         catch (DBusException dbe) when (
             (dbe.ErrorName == "org.freedesktop.DBus.Error.UnknownMethod" &&

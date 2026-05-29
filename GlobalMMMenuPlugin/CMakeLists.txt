@@ -4,7 +4,7 @@ project(GlobalMMMenuPlugin CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_AUTOMOC ON)
 
-find_package(Qt5 5.15 REQUIRED COMPONENTS Core Qml Quick Gui Widgets)
+find_package(Qt5 5.15 REQUIRED COMPONENTS Core Qml Quick Gui Widgets DBus)
 
 add_library(globalmenuhelper MODULE
     src/plugin.h
@@ -24,6 +24,7 @@ target_link_libraries(globalmenuhelper
     Qt5::Quick
     Qt5::Gui
     Qt5::Widgets
+    Qt5::DBus
 )
 
 # Install to the system Qt QML path — the same location used by

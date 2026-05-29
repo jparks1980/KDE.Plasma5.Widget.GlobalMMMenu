@@ -145,6 +145,202 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
     }
 
     /// <summary>
+    // Cache: pid → AT-SPI bus connection name. Avoids a full ListNames scan on every focus event.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<uint, string> _atspiBusConnCache = new();
+
+    /// <summary>
+    /// For Chromium-based apps (Brave, Chrome, Chromium) that expose all browser windows
+    /// through a SINGLE AT-SPI connection with multiple FRAME children, determines the
+    /// 1-based creation-order rank of the CURRENTLY FOCUSED window.
+    ///
+    /// Both AT-SPI accessible node IDs and Chromium's dbusmenu path suffix numbers are
+    /// assigned monotonically in window-creation order. The rank of a window's node
+    /// (sorted by node ID ascending) equals the rank of its dbusmenu path (sorted by
+    /// path suffix number ascending). This correlation lets us pick the correct dbusmenu
+    /// path for a focused window without probing each path.
+    ///
+    /// Strategy (in order):
+    ///   1. Geometry — match KWin window position against AT-SPI component screen extents.
+    ///      Works for any title (including "New Tab"). Uniquely identifies windows on
+    ///      different monitors; falls through to title when multiple nodes share a position.
+    ///   2. Title match — compare KWin caption against AT-SPI accessible Name. Works for
+    ///      unique titles on the same monitor.
+    ///   3. StateActive — last resort; unreliable due to async lag from Brave's bridge.
+    ///
+    /// Example (3 Brave windows, 2 previously closed):
+    ///   AT-SPI: [/accessible/1="Search...", /accessible/2="Acorn...", /accessible/3="Pete..."]
+    ///   DBus:   [/menu/1, /menu/4, /menu/5]  (gaps at 2,3 = closed windows)
+    ///   "New Tab" on Monitor 2 → geometry matches only node 1 (x≈1920) → rank=1 → /menu/1
+    /// </summary>
+    /// <returns>1-based rank of the focused window, or 0 if not found / AT-SPI unavailable.</returns>
+    public async Task<int> GetDbusmenuRankForWindowAsync(uint pid, string windowTitle, int gx, int gy, CancellationToken cancellationToken)
+    {
+        if (_atspiConnection == null || _atspiBusDaemon == null) return 0;
+
+        // Find (or recall from cache) the AT-SPI connection for this PID.
+        if (!_atspiBusConnCache.TryGetValue(pid, out var atspiBusConn))
+        {
+            try
+            {
+                var names = await _atspiBusDaemon.ListNamesAsync();
+                var uniqueNames = names.Where(n => n.StartsWith(':')).ToArray();
+                const int batchSize = 16;
+                for (int i = 0; i < uniqueNames.Length && atspiBusConn == null; i += batchSize)
+                {
+                    if (cancellationToken.IsCancellationRequested) return 0;
+                    var batch = uniqueNames.Skip(i).Take(batchSize);
+                    var pidTasks = batch.Select(async name =>
+                    {
+                        try { return (name, Pid: await _atspiBusDaemon.GetConnectionUnixProcessIDAsync(name)); }
+                        catch { return (name, Pid: 0u); }
+                    });
+                    foreach (var (name, p) in await Task.WhenAll(pidTasks))
+                        if (p == pid) { atspiBusConn = name; break; }
+                }
+            }
+            catch { return 0; }
+
+            if (atspiBusConn == null) return 0;
+            _atspiBusConnCache[pid] = atspiBusConn;
+        }
+
+        // Get root's child windows (FRAME-role accessible nodes).
+        var rootProxy = _atspiConnection.CreateProxy<IAtSpiAccessible>(
+            atspiBusConn, new ObjectPath("/org/a11y/atspi/accessible/root"));
+
+        (string BusName, ObjectPath Path)[] children;
+        try { children = await rootProxy.GetChildrenAsync(); }
+        catch
+        {
+            // Connection may have died — evict cache so next call re-scans.
+            _atspiBusConnCache.TryRemove(pid, out _);
+            return 0;
+        }
+
+        if (children.Length == 0) return 0;
+
+        // Sort children by their accessible node ID (trailing number in D-Bus object path).
+        // Chromium assigns these IDs monotonically in window-creation order.
+        var ranked = children
+            .Select(c =>
+            {
+                var pathStr = c.Path.ToString();
+                var sep = pathStr.LastIndexOf('/');
+                var numStr = sep >= 0 ? pathStr[(sep + 1)..] : "";
+                return (c.BusName, c.Path, NodeId: int.TryParse(numStr, out var n) ? n : int.MaxValue);
+            })
+            .OrderBy(x => x.NodeId)
+            .ToArray();
+
+        // Fetch Name, screen extents, and StateActive for all nodes concurrently.
+        var nodeInfos = await Task.WhenAll(ranked.Select(async r =>
+        {
+            string name = "";
+            int extX = int.MinValue, extY = int.MinValue;
+            bool isActive = false;
+            try
+            {
+                var acc = _atspiConnection.CreateProxy<IAtSpiAccessible>(r.BusName, r.Path);
+                name = await acc.GetAsync<string>("Name");
+                try { var s = await acc.GetStateAsync(); isActive = s.Length > 0 && (s[0] & StateActive) != 0; } catch { }
+            }
+            catch { }
+            try
+            {
+                var comp = _atspiConnection.CreateProxy<IAtSpiComponent>(r.BusName, r.Path);
+                var ext  = await comp.GetExtentsAsync(0); // coord_type=0 = XY_SCREEN
+                extX = ext.X; extY = ext.Y;
+            }
+            catch { /* IComponent not always implemented */ }
+            return (r.NodeId, Name: name, ExtX: extX, ExtY: extY, IsActive: isActive);
+        }));
+
+        // Log all nodes at Info level for diagnostics.
+        for (int i = 0; i < nodeInfos.Length; i++)
+        {
+            var n = nodeInfos[i];
+            logger.LogInformation(
+                "[AT-SPI] Node {R}/{Total}: id={Id} name='{N}' pos=({X},{Y}) active={A}",
+                i + 1, nodeInfos.Length, n.NodeId, n.Name, n.ExtX, n.ExtY, n.IsActive);
+        }
+        logger.LogInformation(
+            "[AT-SPI] KWin geo=({GX},{GY}) title='{T}'", gx, gy, windowTitle);
+
+        // Strategy 1: Geometry — match KWin window position against AT-SPI screen extents.
+        // AT-SPI FRAME extents are screen-absolute. KWin reports the window outer frame position.
+        // Allow 350px tolerance to cover title bars, decorations, and Wayland coordinate offsets.
+        // When exactly one node matches, it uniquely identifies the focused window (cross-monitor).
+        if (gx != 0 || gy != 0)
+        {
+            const int geoTolerance = 350;
+            var geoMatches = nodeInfos
+                .Select((n, i) => (n, Rank: i + 1))
+                .Where(x => x.n.ExtX != int.MinValue
+                         && Math.Abs(x.n.ExtX - gx) < geoTolerance
+                         && Math.Abs(x.n.ExtY - gy) < geoTolerance)
+                .ToArray();
+
+            if (geoMatches.Length == 1)
+            {
+                logger.LogInformation(
+                    "[AT-SPI] Rank by geometry: kwin=({GX},{GY}) atspi=({AX},{AY}) → rank={R}/{Total} node={N}",
+                    gx, gy, geoMatches[0].n.ExtX, geoMatches[0].n.ExtY,
+                    geoMatches[0].Rank, nodeInfos.Length, geoMatches[0].n.NodeId);
+                return geoMatches[0].Rank;
+            }
+        }
+
+        // Strategy 2: Title match — compare KWin caption against AT-SPI accessible Name.
+        if (!string.IsNullOrEmpty(windowTitle))
+        {
+            for (int i = 0; i < nodeInfos.Length; i++)
+            {
+                var n = nodeInfos[i];
+                if (!string.IsNullOrEmpty(n.Name) && WindowTitlesMatch(windowTitle, n.Name))
+                {
+                    logger.LogInformation(
+                        "[AT-SPI] Rank by title: '{T}' ~ '{N}' → rank={R}/{Total} node={Id}",
+                        windowTitle, n.Name, i + 1, nodeInfos.Length, n.NodeId);
+                    return i + 1;
+                }
+            }
+        }
+
+        // Strategy 3: StateActive — unreliable due to async lag but used as last resort.
+        for (int i = 0; i < nodeInfos.Length; i++)
+        {
+            if (nodeInfos[i].IsActive)
+            {
+                logger.LogInformation(
+                    "[AT-SPI] Rank by StateActive: rank={R}/{Total} node={N}",
+                    i + 1, nodeInfos.Length, nodeInfos[i].NodeId);
+                return i + 1;
+            }
+        }
+
+        logger.LogInformation(
+            "[AT-SPI] No rank match for pid={P} title='{T}' kwin=({GX},{GY})", pid, windowTitle, gx, gy);
+        return 0;
+    }
+
+    /// <summary>
+    /// Returns true when two window title strings refer to the same window, tolerating
+    /// browser-appended suffixes like " - Brave" or " - Google Chrome".
+    /// </summary>
+    private static bool WindowTitlesMatch(string a, string b)
+    {
+        if (string.Equals(a, b, StringComparison.OrdinalIgnoreCase)) return true;
+        static string Strip(string s)
+        {
+            foreach (var suffix in new[] { " - Brave", " - Brave Browser", " - Chrome",
+                                           " - Chromium", " - Firefox", " - Google Chrome" })
+                if (s.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+                    return s[..^suffix.Length];
+            return s;
+        }
+        return string.Equals(Strip(a), Strip(b), StringComparison.OrdinalIgnoreCase);
+    }
+
     /// Builds a menu JSON string for the window belonging to the given OS process ID.
     /// Also returns an ID→(busName,path) map so the exporter can route ExecuteItem calls.
     /// Returns (null, empty) if the app has no menu bar or is not registered on AT-SPI.
@@ -161,7 +357,8 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
     /// </summary>
     public async Task<(string? Json, Dictionary<int, (string BusName, string Path)> IdMap, string? AtSpiBusName)>
         GetMenuJsonForPidAsync(uint pid, CancellationToken cancellationToken,
-                               uint preferredWindowId = 0, string? preferredWindowTitle = null)
+                               uint preferredWindowId = 0, string? preferredWindowTitle = null,
+                               int preferredGx = -1, int preferredGy = -1)
     {
         var empty = (Json: (string?)null, IdMap: new Dictionary<int, (string, string)>(), AtSpiBusName: (string?)null);
         if (_atspiConnection == null || _atspiBusDaemon == null)
@@ -212,7 +409,7 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
         if (matchingConns.Count == 1)
         {
             var (json, idMap) = await GetMenuJsonFromConnectionAsync(
-                matchingConns[0], cancellationToken, preferredWindowId, preferredWindowTitle);
+                matchingConns[0], cancellationToken, preferredWindowId, preferredWindowTitle, preferredGx, preferredGy);
             return (json, idMap, matchingConns[0]);
         }
 
@@ -224,13 +421,13 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
         //   3. StateActive — the focused window's connection sets this flag
         // If none match, fall back to the first connection.
         logger.LogDebug(
-            "[AT-SPI] pid={P}: {N} connections — selecting for window 0x{W:X8} '{T}'",
-            pid, matchingConns.Count, preferredWindowId, preferredWindowTitle ?? "");
+            "[AT-SPI] pid={P}: {N} connections — selecting for window 0x{W:X8} '{T}' geo=({GX},{GY})",
+            pid, matchingConns.Count, preferredWindowId, preferredWindowTitle ?? "", preferredGx, preferredGy);
 
         string? bestConn = null;
 
-        // Strategies 1 & 2: deterministic (no timing dependency).
-        if (preferredWindowId != 0 || !string.IsNullOrEmpty(preferredWindowTitle))
+        // Strategies 1, 2 & 2.5: deterministic (no timing dependency).
+        if (preferredWindowId != 0 || !string.IsNullOrEmpty(preferredWindowTitle) || (preferredGx >= 0 && preferredGy >= 0))
         {
             foreach (var conn in matchingConns)
             {
@@ -290,6 +487,29 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
                                 }
                                 catch { }
                             }
+
+                            if (bestConn != null) break;
+
+                            // Strategy 2.5: geometry match — compare KWin c.geometry.x/y against
+                            // AT-SPI component extents.  No timing dependency: the window's screen
+                            // position is stable and independent of focus-event processing.
+                            if (preferredGx >= 0 && preferredGy >= 0)
+                            {
+                                try
+                                {
+                                    var comp = _atspiConnection!.CreateProxy<IAtSpiComponent>(wb, wp);
+                                    var ext  = await comp.GetExtentsAsync(0); // 0 = XY_SCREEN
+                                    if (ext.X == preferredGx && ext.Y == preferredGy)
+                                    {
+                                        bestConn = conn;
+                                        logger.LogDebug(
+                                            "[AT-SPI] pid={P}: matched conn {C} by geometry ({GX},{GY})",
+                                            pid, conn, preferredGx, preferredGy);
+                                        break;
+                                    }
+                                }
+                                catch { }
+                            }
                         }
                         catch { }
                     }
@@ -336,7 +556,7 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
         bestConn ??= matchingConns[0];
 
         var (bJson, bIdMap) = await GetMenuJsonFromConnectionAsync(
-            bestConn, cancellationToken, preferredWindowId, preferredWindowTitle);
+            bestConn, cancellationToken, preferredWindowId, preferredWindowTitle, preferredGx, preferredGy);
         return (bJson, bIdMap, bestConn);
     }
 
@@ -425,7 +645,8 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
     /// </summary>
     public async Task<(string? Json, Dictionary<int, (string BusName, string Path)> IdMap)>
         GetMenuJsonFromConnectionAsync(string atspiBusName, CancellationToken cancellationToken,
-                                       uint preferredWindowId = 0, string? preferredWindowTitle = null)
+                                       uint preferredWindowId = 0, string? preferredWindowTitle = null,
+                                       int preferredGx = -1, int preferredGy = -1)
     {
         var empty = (Json: (string?)null, IdMap: new Dictionary<int, (string, string)>());
         if (_atspiConnection == null) return empty;
@@ -447,7 +668,7 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
                 // unreliable here because the X11 focus event arrives at our service at the same
                 // time as it arrives at the app, creating a race between our scan and the app
                 // updating its AT-SPI state.
-                if (preferredWindowId != 0 || !string.IsNullOrEmpty(preferredWindowTitle))
+                if (preferredWindowId != 0 || !string.IsNullOrEmpty(preferredWindowTitle) || (preferredGx >= 0 && preferredGy >= 0))
                 {
                     foreach (var (winBus, winPath) in windows)
                     {
@@ -494,6 +715,27 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
                                     }
                                 }
                                 catch { /* name read failed — try next strategy */ }
+                            }
+
+                            // Strategy 2.5: geometry — compare KWin c.geometry.x/y with AT-SPI extents.
+                            // Timing-independent: window position is stable regardless of focus state.
+                            // Bridges the gap for multi-window Brave/Chromium where title matching fails
+                            // (e.g. all tabs show "New Tab - Brave") and StateActive is stale.
+                            if (preferredGx >= 0 && preferredGy >= 0 && !matched)
+                            {
+                                try
+                                {
+                                    var comp = _atspiConnection!.CreateProxy<IAtSpiComponent>(winBus, winPath);
+                                    var ext  = await comp.GetExtentsAsync(0); // 0 = XY_SCREEN
+                                    if (ext.X == preferredGx && ext.Y == preferredGy)
+                                    {
+                                        matched = true;
+                                        logger.LogDebug(
+                                            "[AT-SPI] {Bus}: matched window by geometry ({GX},{GY})",
+                                            atspiBusName, preferredGx, preferredGy);
+                                    }
+                                }
+                                catch { /* component read failed — try next strategy */ }
                             }
 
                             if (!matched) continue;
@@ -998,10 +1240,12 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
 
     // Holds the DBus-side data for a single menu node: icons plus already-converted children
     // (converted eagerly so we don't hold dangling JsonElement refs after the doc is disposed).
+    // ItemId is the dbusmenu integer item ID (>= 0); -1 means no id was present.
     private sealed record DbusNodeData(
         string?       IconName,
         string?       IconData,
-        List<object?>? Children);
+        List<object?>? Children,
+        int           ItemId = -1);
 
     /// <summary>
     /// Merges DBus icon and submenu data onto an AT-SPI menu JSON tree.
@@ -1012,9 +1256,14 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
     ///     children (Qt's AT-SPI bridge only populates lazy submenus after they are opened;
     ///     DBus's AboutToShow + GetLayout triggers that population up-front).</item>
     /// </list>
+    /// When <paramref name="idMapToUpdate"/> is provided, matched items have their routing entry
+    /// updated to <c>("dbusmenu", dbusItemId)</c> so that <see cref="GlobalMenuExporter"/>.ExecuteItemAsync
+    /// routes clicks through the per-window dbusmenu proxy instead of AT-SPI.
     /// Returns the merged JSON string when at least one field was added; otherwise null.
     /// </summary>
-    public static string? MergeDbusIconsIntoAtSpiJson(string atspiJson, string dbusJson)
+    public static string? MergeDbusIconsIntoAtSpiJson(
+        string atspiJson, string dbusJson,
+        Dictionary<int, (string BusName, string Path)>? idMapToUpdate = null)
     {
         JsonElement atspiRoot;
         // Keep the documents alive until we are done reading JsonElements from them.
@@ -1031,7 +1280,7 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
         if (nodeMap.Count == 0) return null;
 
         bool anyAdded = false;
-        var merged = MergeDbusDataIntoNode(atspiRoot, nodeMap, ref anyAdded);
+        var merged = MergeDbusDataIntoNode(atspiRoot, nodeMap, ref anyAdded, idMapToUpdate);
         if (!anyAdded) return null;
 
         return JsonSerializer.Serialize(merged, new JsonSerializerOptions { WriteIndented = true });
@@ -1061,11 +1310,12 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
             if (kids.Count == 0) kids = null;
         }
 
-        if (!string.IsNullOrEmpty(label) && (iconName != null || iconData != null || kids != null))
+        int itemId = el.TryGetProperty("id", out var idProp) && idProp.TryGetInt32(out var idVal) ? idVal : -1;
+        if (!string.IsNullOrEmpty(label) && (iconName != null || iconData != null || kids != null || itemId >= 0))
         {
             var key = NormalizeLabel(label);
             if (!string.IsNullOrEmpty(key) && !map.ContainsKey(key))
-                map[key] = new DbusNodeData(iconName, iconData, kids);
+                map[key] = new DbusNodeData(iconName, iconData, kids, itemId);
         }
 
         // Recurse for icons/children at deeper levels.
@@ -1115,7 +1365,8 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
     private static object? MergeDbusDataIntoNode(
         JsonElement el,
         Dictionary<string, DbusNodeData> nodeMap,
-        ref bool anyAdded)
+        ref bool anyAdded,
+        Dictionary<int, (string BusName, string Path)>? idMapToUpdate)
     {
         if (el.ValueKind != JsonValueKind.Object) return null;
 
@@ -1128,7 +1379,7 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
             {
                 var kids = new List<object?>();
                 foreach (var child in prop.Value.EnumerateArray())
-                    kids.Add(MergeDbusDataIntoNode(child, nodeMap, ref anyAdded));
+                    kids.Add(MergeDbusDataIntoNode(child, nodeMap, ref anyAdded, idMapToUpdate));
                 dict[prop.Name] = kids;
             }
             else
@@ -1164,6 +1415,24 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
                 // falls through to GlobalMenuExporter._activeMenu.EventAsync().
                 if (!dict.ContainsKey("children") && nd.Children is { Count: > 0 } dbKids)
                     { dict["children"] = dbKids; anyAdded = true; }
+
+                // ── Remap execution routing to dbusmenu ──────────────────────
+                // AT-SPI window selection is unreliable on Wayland for multi-window
+                // apps (Brave/Chromium): the X11 frame window ID we track via KWin
+                // doesn't match the client window ID that Chromium's AT-SPI bridge
+                // exposes, so strategy-1 (window-id attribute) never matches, and
+                // StateActive (strategy-3) has a race with the focus event.
+                // Solution: when we have a dbusmenu path that is per-window (assigned
+                // atomically via _claimedMenuPaths), remap the AT-SPI synthetic ID
+                // to use the dbusmenu proxy for execution.  GlobalMenuExporter checks
+                // for BusName=="dbusmenu" and routes via _activeMenu.EventAsync().
+                if (idMapToUpdate != null && nd.ItemId >= 0
+                    && dict.TryGetValue("id", out var idObj) && idObj is int atspiId
+                    && idMapToUpdate.ContainsKey(atspiId))
+                {
+                    idMapToUpdate[atspiId] = ("dbusmenu", nd.ItemId.ToString());
+                    anyAdded = true;
+                }
             }
         }
 

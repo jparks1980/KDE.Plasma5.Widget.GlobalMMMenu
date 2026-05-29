@@ -2,6 +2,7 @@
 #include "iconprovider.h"
 
 #include <QCursor>
+#include <QDBusInterface>
 #include <QDebug>
 #include <QFile>
 #include <QIcon>
@@ -144,9 +145,33 @@ void GlobalMenuHelper::openNativeMenu(QQuickItem *anchor, const QVariantMap &nod
     connect(menu, &QMenu::aboutToHide, this, [this, capturedMenu]() {
         if (m_nativeMenu == capturedMenu) {
             m_nativeMenu = nullptr;
+            // Notify the D-Bus service that the popup is closing so it can unfreeze
+            // its active proxy. Must happen AFTER any triggered item's ExecuteItem
+            // D-Bus call completes — the service unfreezes in ExecuteItemAsync itself,
+            // so this call here is just the fallback for "menu closed without clicking".
+            QDBusInterface iface(
+                QStringLiteral("com.kde.GlobalMMMenu"),
+                QStringLiteral("/com/kde/GlobalMMMenu"),
+                QStringLiteral("com.kde.GlobalMMMenu"));
+            iface.call(QDBus::NoBlock, QStringLiteral("SetMenuOpen"), false);
             emit menuHidden();
         }
     });
+
+    // Freeze the D-Bus service's active proxy BEFORE the popup opens.
+    // On Wayland, opening the panel's QMenu popup causes the underlying app
+    // (e.g. Brave) to re-focus its last-internally-active window, which fires
+    // KWin clientActivated for that window. Without the freeze, the service would
+    // overwrite _activeMenu/_atspiIdMap with that window's proxy before the user clicks an item.
+    // MUST be a blocking call (QDBus::Block) so the freeze is in effect before menu->popup()
+    // fires Wayland focus events — QProcess::startDetached was async and lost this race.
+    {
+        QDBusInterface iface(
+            QStringLiteral("com.kde.GlobalMMMenu"),
+            QStringLiteral("/com/kde/GlobalMMMenu"),
+            QStringLiteral("com.kde.GlobalMMMenu"));
+        iface.call(QDBus::Block, QStringLiteral("SetMenuOpen"), true);
+    }
 
     menu->popup(screenPos);
 }
@@ -245,7 +270,24 @@ QMenu *GlobalMenuHelper::buildNativeMenu(const QVariantMap &node)
                 }
             }
             connect(action, &QAction::triggered, this, [this, itemId]() {
-                emit menuTriggered(itemId);
+                // Call ExecuteItem SYNCHRONOUSLY while the popup is still open.
+                //
+                // Timing matters on Wayland multi-monitor setups: when the panel popup closes,
+                // the Wayland compositor restores keyboard focus to the last-focused window on
+                // the SAME monitor as the panel (e.g. window D6 on monitor 2), NOT to the
+                // source window (e.g. window B1 on monitor 1). Brave routes dbusmenu events by
+                // its internally-focused window, so an async dispatch after popup-close always
+                // fires on D6 even though the user clicked from B1's menu.
+                //
+                // While the popup is still open no Brave window has received wl_keyboard.enter
+                // yet, so Brave's internal focus is still on B1. By calling ExecuteItem before
+                // the popup closes (QDBus::Block = synchronous round-trip), the action arrives
+                // at the service and is dispatched to Brave while B1 is still focused.
+                QDBusInterface iface(
+                    QStringLiteral("com.kde.GlobalMMMenu"),
+                    QStringLiteral("/com/kde/GlobalMMMenu"),
+                    QStringLiteral("com.kde.GlobalMMMenu"));
+                iface.call(QDBus::Block, QStringLiteral("ExecuteItem"), itemId);
             });
             menu->addAction(action);
         }

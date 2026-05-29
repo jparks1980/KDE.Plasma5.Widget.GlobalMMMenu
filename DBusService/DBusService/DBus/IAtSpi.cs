@@ -175,6 +175,22 @@ public interface IGtkActions : IDBusObject
 }
 
 /// <summary>
+/// org.a11y.atspi.Component — interface for accessible objects that occupy screen space.
+/// Used to read the on-screen position of a window node so we can match it against
+/// the KWin-reported window geometry (c.geometry.x/y) without depending on StateActive.
+/// </summary>
+[DBusInterface("org.a11y.atspi.Component")]
+public interface IAtSpiComponent : IDBusObject
+{
+    /// <summary>
+    /// Returns the bounding rectangle of this component.
+    /// <paramref name="coordType"/> = 0 for screen-absolute coordinates (XY_SCREEN).
+    /// Returns (x, y, width, height).
+    /// </summary>
+    Task<(int X, int Y, int Width, int Height)> GetExtentsAsync(uint coordType);
+}
+
+/// <summary>
 /// org.a11y.Status — session-bus service provided by at-spi-bus-launcher.
 /// Controls whether Qt/GTK apps load their AT-SPI accessibility bridge.
 ///   IsEnabled = true  → all running apps load their AT-SPI bridge (same as Orca starting)

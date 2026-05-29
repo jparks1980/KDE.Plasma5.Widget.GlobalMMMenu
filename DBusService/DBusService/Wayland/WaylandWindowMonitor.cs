@@ -48,7 +48,7 @@ public sealed class WaylandWindowMonitor : IActiveWindowMonitor, IKWinWindowCall
     private readonly ConcurrentDictionary<uint, (string Service, string Path)> _menuInfo = new();
 
     // Window metadata cache updated directly from the KWin script callback.
-    private readonly ConcurrentDictionary<uint, (string? Caption, uint Pid)> _windowCache = new();
+    private readonly ConcurrentDictionary<uint, (string? Caption, uint Pid, int Gx, int Gy)> _windowCache = new();
 
     private uint _lastActiveId;
 
@@ -177,12 +177,13 @@ public sealed class WaylandWindowMonitor : IActiveWindowMonitor, IKWinWindowCall
         _lastActiveId = id;
         _seenIds[id]  = 0;
 
-        // Cache the pid and caption directly from the script (avoids any D-Bus round-trip).
-        if (pidVal != 0 || !string.IsNullOrEmpty(caption))
+        // Cache the pid, caption, and geometry directly from the script (avoids any D-Bus round-trip).
+        if (pidVal != 0 || !string.IsNullOrEmpty(caption) || gxVal != 0 || gyVal != 0)
         {
             var cap = string.IsNullOrEmpty(caption) ? null : caption;
-            _windowCache.AddOrUpdate(id, (cap, pidVal), (_, existing) =>
-                (cap ?? existing.Caption, pidVal != 0 ? pidVal : existing.Pid));
+            _windowCache.AddOrUpdate(id, (cap, pidVal, gxVal, gyVal), (_, existing) =>
+                (cap ?? existing.Caption, pidVal != 0 ? pidVal : existing.Pid,
+                 gxVal != 0 ? gxVal : existing.Gx, gyVal != 0 ? gyVal : existing.Gy));
         }
 
         var (svc, path) = GetWindowMenuInfo((IntPtr)id);
@@ -209,6 +210,18 @@ public sealed class WaylandWindowMonitor : IActiveWindowMonitor, IKWinWindowCall
         if (_windowCache.TryGetValue(id, out var c) && c.Caption != null)
             return c.Caption;
         return null;
+    }
+
+    /// <summary>
+    /// Returns the screen-space top-left position of the window as reported by KWin's
+    /// c.geometry.x/y in the script callback.  Used for geometry-based AT-SPI window selection.
+    /// </summary>
+    public (int Gx, int Gy) GetWindowGeometry(IntPtr window)
+    {
+        var id = (uint)window;
+        if (_windowCache.TryGetValue(id, out var c))
+            return (c.Gx, c.Gy);
+        return (-1, -1);
     }
 
     /// <summary>
@@ -284,7 +297,7 @@ public sealed class WaylandWindowMonitor : IActiveWindowMonitor, IKWinWindowCall
         var script = $@"workspace.clientActivated.connect(function(c) {{
     if (!c) return;
     var wid = c.windowId || 0;
-    var iid = (typeof c.internalId === 'string') ? c.internalId : '';
+    var iid = (typeof c.internalId === 'string') ? c.internalId : String(c.internalId || '');
     var gx  = c.geometry ? c.geometry.x : (c.x || 0);
     var gy  = c.geometry ? c.geometry.y : (c.y || 0);
     callDBus(

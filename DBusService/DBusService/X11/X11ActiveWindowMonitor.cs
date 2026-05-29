@@ -140,6 +140,9 @@ public sealed class X11ActiveWindowMonitor : IActiveWindowMonitor
         => ReadStringProperty(window, _netWmNameAtom)
         ?? ReadStringProperty(window, _wmNameAtom);
 
+    /// <summary>X11 geometry matching is not needed — AT-SPI selection works reliably on X11.</summary>
+    public (int Gx, int Gy) GetWindowGeometry(IntPtr window) => (-1, -1);
+
     /// <summary>Returns the _NET_WM_PID of a window, or 0 if not set.</summary>
     public uint GetWindowPid(IntPtr window)
     {

@@ -44,6 +44,13 @@ public interface IActiveWindowMonitor : IDisposable
     /// <summary>Returns the window title, or <c>null</c> if unavailable.</summary>
     string? GetWindowName(IntPtr window);
 
+    /// <summary>
+    /// Returns the screen-space top-left position of the window, or (-1, -1) if unavailable.
+    /// On Wayland this comes from KWin's c.geometry.x/y from the script callback.
+    /// On X11 this always returns (-1, -1) — X11 geometry matching is not needed there.
+    /// </summary>
+    (int Gx, int Gy) GetWindowGeometry(IntPtr window);
+
     /// <summary>Returns the OS process ID that owns the window, or 0 if unavailable.</summary>
     uint GetWindowPid(IntPtr window);
 
