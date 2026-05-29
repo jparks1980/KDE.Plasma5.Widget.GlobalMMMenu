@@ -442,17 +442,37 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                             logger.LogInformation("  0x{W:X8}: fast-path AT-SPI (icons cached)", windowId);
 
                             // Background: refresh AT-SPI + re-merge DBus to catch menu structure changes.
+                            // Use GetMenuJsonForPidAsync (not GetMenuJsonFromConnectionAsync) so that for
+                            // multi-connection apps (Brave/Chromium), we re-select the correct connection
+                            // on every focus instead of reusing the stale cached AtSpiBusName.
                             var fWinId = windowId; var fSrc = knownSrc;
+                            var fWinPid = windowMonitor.GetWindowPid((IntPtr)windowId);
+                            var fWinTitle = windowMonitor.GetWindowName((IntPtr)windowId);
                             _ = Task.Run(async () =>
                             {
                                 try
                                 {
                                     using var rCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
                                     rCts.CancelAfter(TimeSpan.FromSeconds(15));
-                                    var (freshJson, freshMap) = await atspi.GetMenuJsonFromConnectionAsync(
-                                        fSrc.AtSpiBusName!, rCts.Token,
-                                        preferredWindowId: fWinId,
-                                        preferredWindowTitle: windowMonitor.GetWindowName((IntPtr)fWinId));
+                                    string? freshAtSpiBusName;
+                                    Dictionary<int, (string BusName, string Path)> freshMap;
+                                    string? freshJson;
+                                    if (fWinPid != 0)
+                                    {
+                                        (freshJson, freshMap, freshAtSpiBusName) = await atspi.GetMenuJsonForPidAsync(
+                                            fWinPid, rCts.Token,
+                                            preferredWindowId: fWinId,
+                                            preferredWindowTitle: fWinTitle);
+                                    }
+                                    else
+                                    {
+                                        // PID unknown — fall back to cached bus name
+                                        (freshJson, freshMap) = await atspi.GetMenuJsonFromConnectionAsync(
+                                            fSrc.AtSpiBusName!, rCts.Token,
+                                            preferredWindowId: fWinId,
+                                            preferredWindowTitle: fWinTitle);
+                                        freshAtSpiBusName = fSrc.AtSpiBusName;
+                                    }
                                     if (string.IsNullOrEmpty(freshJson) || freshJson == "{}") return;
 
                                     if (!string.IsNullOrEmpty(fSrc.DbusService) && !string.IsNullOrEmpty(fSrc.DbusPath))
@@ -476,8 +496,8 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                                                     exporter.UpdateAtSpi(enriched, atspi, freshMap, dbProxy);
                                                     menuCache[fWinId] = enriched;
                                                 }
-                                                windowSources[fWinId] = fSrc with { IdMap = freshMap };
-                                                logger.LogDebug("  0x{W:X8}: fast-path icon cache refreshed", fWinId);
+                                                windowSources[fWinId] = fSrc with { IdMap = freshMap, AtSpiBusName = freshAtSpiBusName };
+                                                logger.LogDebug("  0x{W:X8}: fast-path icon cache refreshed (conn={C})", fWinId, freshAtSpiBusName);
                                                 return;
                                             }
                                         }
@@ -489,7 +509,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                                     var finalOnly = enrichedOnly ?? freshJson;
                                     exporter.UpdateAtSpi(finalOnly, atspi, freshMap);
                                     menuCache[fWinId] = finalOnly;
-                                    windowSources[fWinId] = fSrc with { IdMap = freshMap };
+                                    windowSources[fWinId] = fSrc with { IdMap = freshMap, AtSpiBusName = freshAtSpiBusName };
                                 }
                                 catch (Exception ex)
                                 {
@@ -500,17 +520,36 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                         }
 
                         // No icon cache yet — do a full AT-SPI scan and background DBus merge.
+                        // Use GetMenuJsonForPidAsync so multi-connection apps pick the right window.
                         using var fastCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
                         fastCts.CancelAfter(TimeSpan.FromSeconds(15));
                         try
                         {
-                            var (fJson, fMap) = await atspi.GetMenuJsonFromConnectionAsync(
-                                knownSrc.AtSpiBusName!, fastCts.Token,
-                                preferredWindowId: windowId,
-                                preferredWindowTitle: windowMonitor.GetWindowName((IntPtr)windowId));
+                            var fastPid = windowMonitor.GetWindowPid((IntPtr)windowId);
+                            var fastTitle = windowMonitor.GetWindowName((IntPtr)windowId);
+                            string? fastAtSpiBus;
+                            Dictionary<int, (string BusName, string Path)> fMap;
+                            string? fJson;
+                            if (fastPid != 0)
+                            {
+                                string? tmpBus;
+                                (fJson, fMap, tmpBus) = await atspi.GetMenuJsonForPidAsync(
+                                    fastPid, fastCts.Token,
+                                    preferredWindowId: windowId,
+                                    preferredWindowTitle: fastTitle);
+                                fastAtSpiBus = tmpBus ?? knownSrc.AtSpiBusName;
+                            }
+                            else
+                            {
+                                (fJson, fMap) = await atspi.GetMenuJsonFromConnectionAsync(
+                                    knownSrc.AtSpiBusName!, fastCts.Token,
+                                    preferredWindowId: windowId,
+                                    preferredWindowTitle: fastTitle);
+                                fastAtSpiBus = knownSrc.AtSpiBusName;
+                            }
                             if (!string.IsNullOrEmpty(fJson) && fJson != "{}")
                             {
-                                logger.LogInformation("  0x{W:X8}: fast-path AT-SPI (bus={B})", windowId, knownSrc.AtSpiBusName);
+                                logger.LogInformation("  0x{W:X8}: fast-path AT-SPI (bus={B})", windowId, fastAtSpiBus);
                                 exporter.UpdateAtSpi(fJson, atspi, fMap);
                                 menuCache[windowId] = fJson;
                                 var fEnrichJson = fJson; var fEnrichMap = fMap; var fWinId2 = windowId;

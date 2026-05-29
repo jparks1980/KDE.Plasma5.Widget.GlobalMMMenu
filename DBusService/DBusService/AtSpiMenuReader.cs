@@ -149,9 +149,15 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
     /// Also returns an ID→(busName,path) map so the exporter can route ExecuteItem calls.
     /// Returns (null, empty) if the app has no menu bar or is not registered on AT-SPI.
     ///
-    /// <paramref name="preferredWindowId"/> and <paramref name="preferredWindowTitle"/> are
-    /// forwarded to <see cref="GetMenuJsonFromConnectionAsync"/> to select the correct window
-    /// node within multi-window apps that share a single AT-SPI connection (e.g. Brave).
+    /// Multi-window apps fall into two categories:
+    ///   A) ONE shared AT-SPI connection with multiple window children (some Qt apps).
+    ///      → <see cref="GetMenuJsonFromConnectionAsync"/> handles window selection there.
+    ///   B) MULTIPLE separate AT-SPI connections for the same PID (Brave, Chromium).
+    ///      Each browser window registers its own AT-SPI connection even though all share
+    ///      the same browser-process PID.  In this case we must pick the RIGHT connection —
+    ///      the one belonging to the focused X11 window — before calling GetMenuJsonFromConnectionAsync.
+    ///      <paramref name="preferredWindowId"/> and <paramref name="preferredWindowTitle"/> are used
+    ///      to select the correct connection among all candidates.
     /// </summary>
     public async Task<(string? Json, Dictionary<int, (string BusName, string Path)> IdMap, string? AtSpiBusName)>
         GetMenuJsonForPidAsync(uint pid, CancellationToken cancellationToken,
@@ -161,17 +167,17 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
         if (_atspiConnection == null || _atspiBusDaemon == null)
             return empty;
 
-        // ── Find the AT-SPI connection whose OS PID matches ──────────────────
-        // Query all PIDs in parallel (batches of 16) to avoid O(n) sequential latency
-        // when there are many AT-SPI connections (30+ is typical on a KDE desktop).
-        string? appBusName = null;
+        // ── Find ALL AT-SPI connections whose OS PID matches ─────────────────
+        // Most apps have one connection; Chromium/Brave may have one per window.
+        // We must collect all of them and then pick the right one for the focused window.
+        var matchingConns = new List<string>();
         try
         {
             var names = await _atspiBusDaemon.ListNamesAsync();
             var uniqueNames = names.Where(n => n.StartsWith(':')).ToArray();
 
             const int batchSize = 16;
-            for (int i = 0; i < uniqueNames.Length && appBusName == null; i += batchSize)
+            for (int i = 0; i < uniqueNames.Length; i += batchSize)
             {
                 if (cancellationToken.IsCancellationRequested) break;
                 var batch = uniqueNames.Skip(i).Take(batchSize);
@@ -186,9 +192,8 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
                 });
                 var results = await Task.WhenAll(pidTasks);
                 foreach (var (name, busNamePid) in results)
-                {
-                    if (busNamePid == pid && busNamePid != 0) { appBusName = name; break; }
-                }
+                    if (busNamePid == pid && busNamePid != 0)
+                        matchingConns.Add(name);
             }
         }
         catch (Exception ex)
@@ -197,15 +202,142 @@ public sealed class AtSpiMenuReader(ILogger logger) : IAsyncDisposable
             return empty;
         }
 
-        if (appBusName == null)
+        if (matchingConns.Count == 0)
         {
             logger.LogDebug("[AT-SPI] No AT-SPI connection found for pid={P}", pid);
             return empty;
         }
 
-        var (json, idMap) = await GetMenuJsonFromConnectionAsync(
-            appBusName, cancellationToken, preferredWindowId, preferredWindowTitle);
-        return (json, idMap, appBusName);
+        // ── Single connection: fast path, no selection needed ─────────────────
+        if (matchingConns.Count == 1)
+        {
+            var (json, idMap) = await GetMenuJsonFromConnectionAsync(
+                matchingConns[0], cancellationToken, preferredWindowId, preferredWindowTitle);
+            return (json, idMap, matchingConns[0]);
+        }
+
+        // ── Multiple connections for same PID (e.g. Brave with 3 windows) ────
+        // Each connection likely has exactly ONE window in its accessible tree.
+        // Pick the correct connection by trying three strategies in order:
+        //   1. window-id attribute match (Chromium may expose X11 ID here)
+        //   2. window title match (accessible Name vs preferred title)
+        //   3. StateActive — the focused window's connection sets this flag
+        // If none match, fall back to the first connection.
+        logger.LogDebug(
+            "[AT-SPI] pid={P}: {N} connections — selecting for window 0x{W:X8} '{T}'",
+            pid, matchingConns.Count, preferredWindowId, preferredWindowTitle ?? "");
+
+        string? bestConn = null;
+
+        // Strategies 1 & 2: deterministic (no timing dependency).
+        if (preferredWindowId != 0 || !string.IsNullOrEmpty(preferredWindowTitle))
+        {
+            foreach (var conn in matchingConns)
+            {
+                if (cancellationToken.IsCancellationRequested) break;
+                try
+                {
+                    var connRoot = _atspiConnection.CreateProxy<IAtSpiAccessible>(
+                        conn, new ObjectPath("/org/a11y/atspi/accessible/root"));
+                    var connWindows = await connRoot.GetChildrenAsync();
+                    foreach (var (wb, wp) in connWindows)
+                    {
+                        if (cancellationToken.IsCancellationRequested) break;
+                        try
+                        {
+                            var winAcc = _atspiConnection.CreateProxy<IAtSpiAccessible>(wb, wp);
+
+                            // Strategy 1: window-id attribute (decimal or hex)
+                            if (preferredWindowId != 0)
+                            {
+                                try
+                                {
+                                    var attrs = await winAcc.GetAttributesAsync();
+                                    if (attrs.TryGetValue("window-id", out var wid))
+                                    {
+                                        bool parsed = uint.TryParse(wid, out var decId) && decId == preferredWindowId;
+                                        if (!parsed)
+                                            parsed = uint.TryParse(wid.TrimStart('0', 'x', 'X'),
+                                                         System.Globalization.NumberStyles.HexNumber,
+                                                         null, out var hexId) && hexId == preferredWindowId;
+                                        if (parsed)
+                                        {
+                                            bestConn = conn;
+                                            logger.LogDebug(
+                                                "[AT-SPI] pid={P}: matched conn {C} by window-id={W}", pid, conn, wid);
+                                            break;
+                                        }
+                                    }
+                                }
+                                catch { }
+                            }
+                            if (bestConn != null) break;
+
+                            // Strategy 2: window title (accessible Name)
+                            if (!string.IsNullOrEmpty(preferredWindowTitle))
+                            {
+                                try
+                                {
+                                    var name = await winAcc.GetAsync<string>("Name");
+                                    if (!string.IsNullOrEmpty(name) &&
+                                        name.Equals(preferredWindowTitle, StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        bestConn = conn;
+                                        logger.LogDebug(
+                                            "[AT-SPI] pid={P}: matched conn {C} by title '{N}'", pid, conn, name);
+                                        break;
+                                    }
+                                }
+                                catch { }
+                            }
+                        }
+                        catch { }
+                    }
+                }
+                catch { }
+                if (bestConn != null) break;
+            }
+        }
+
+        // Strategy 3: StateActive (timing-dependent but often works on re-focus)
+        if (bestConn == null)
+        {
+            foreach (var conn in matchingConns)
+            {
+                if (cancellationToken.IsCancellationRequested) break;
+                try
+                {
+                    var connRoot = _atspiConnection.CreateProxy<IAtSpiAccessible>(
+                        conn, new ObjectPath("/org/a11y/atspi/accessible/root"));
+                    var connWindows = await connRoot.GetChildrenAsync();
+                    foreach (var (wb, wp) in connWindows)
+                    {
+                        try
+                        {
+                            var winAcc = _atspiConnection.CreateProxy<IAtSpiAccessible>(wb, wp);
+                            var state  = await winAcc.GetStateAsync();
+                            if (state.Length > 0 && (state[0] & StateActive) != 0)
+                            {
+                                bestConn = conn;
+                                logger.LogDebug(
+                                    "[AT-SPI] pid={P}: matched conn {C} by StateActive", pid, conn);
+                                break;
+                            }
+                        }
+                        catch { }
+                    }
+                }
+                catch { }
+                if (bestConn != null) break;
+            }
+        }
+
+        // Fallback: first connection
+        bestConn ??= matchingConns[0];
+
+        var (bJson, bIdMap) = await GetMenuJsonFromConnectionAsync(
+            bestConn, cancellationToken, preferredWindowId, preferredWindowTitle);
+        return (bJson, bIdMap, bestConn);
     }
 
     // AT-SPI state constants for window-level states
