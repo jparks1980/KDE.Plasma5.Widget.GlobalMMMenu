@@ -626,7 +626,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                                         else
                                         {
                                             (dbSvc, dbPath) = await FindMenuByPidAsync(
-                                                connection, dbus, windowMonitor, registrarImpl, bgWinId, null, bgCts.Token);
+                                                connection, dbus, windowMonitor, registrarImpl, windowSources, bgWinId, null, bgCts.Token);
                                         }
 
                                         if (!string.IsNullOrEmpty(dbSvc) && !string.IsNullOrEmpty(dbPath) && dbPath != "/")
@@ -794,7 +794,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                                                         dbsCts.CancelAfter(TimeSpan.FromSeconds(8));
                                                         (retrySvc, retryPath) = await FindMenuByPidAsync(
                                                             connection, dbus, windowMonitor, registrarImpl,
-                                                            retryWinId, null, dbsCts.Token);
+                                                            windowSources, retryWinId, null, dbsCts.Token);
                                                     }
                                                     finally { retryPidSemaphore.Release(); }
                                                 }
@@ -998,7 +998,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                 if (string.IsNullOrEmpty(service) || string.IsNullOrEmpty(path) || path == "/")
                 {
                     var knownPath = (string.IsNullOrEmpty(path) || path == "/") ? null : path;
-                    var (ds, dp) = await FindMenuByPidAsync(connection, dbus, windowMonitor, registrarImpl, windowId, knownPath, windowCts!.Token);
+                    var (ds, dp) = await FindMenuByPidAsync(connection, dbus, windowMonitor, registrarImpl, windowSources, windowId, knownPath, windowCts!.Token);
                     if (!string.IsNullOrEmpty(ds) && !string.IsNullOrEmpty(dp))
                     {
                         service = ds;
@@ -1139,7 +1139,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                     else
                     {
                         // Fall back to PID scan (knownPath=null → tries default format).
-                        (ns, np) = await FindMenuByPidAsync(connection, dbus, windowMonitor, registrarImpl, windowId, null, windowCts!.Token);
+                        (ns, np) = await FindMenuByPidAsync(connection, dbus, windowMonitor, registrarImpl, windowSources, windowId, null, windowCts!.Token);
                     }
                     if (!string.IsNullOrEmpty(ns) && !string.IsNullOrEmpty(np))
                     {
@@ -1255,7 +1255,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                 try
                 {
                     var (service, path) = await FindMenuByPidAsync(
-                        connection, dbus, windowMonitor, registrar, windowId, null, discoveryCts.Token);
+                        connection, dbus, windowMonitor, registrar, windowSources, windowId, null, discoveryCts.Token);
                     if (string.IsNullOrEmpty(service) || string.IsNullOrEmpty(path))
                         continue;
 
@@ -1529,6 +1529,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
         IFreedesktopDBus dbus,
         IActiveWindowMonitor windowMonitor,
         AppMenuRegistrarImpl registrar,
+        ConcurrentDictionary<uint, WindowMenuSource> windowSources,
         uint windowId,
         string? knownMenuPath,
         CancellationToken cancellationToken)
@@ -1584,26 +1585,40 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
             // ── Build candidate list ──────────────────────────────────────────
             // Priority order:
             // 1. Known path (caller-supplied, e.g. from X11 props)
-            // 2. Registrar paths already resolved to this service name
+            // 2. Unclaimed registrar paths resolved to this service — paths not yet
+            //    used by any other window. For multi-window apps (Brave, Chromium)
+            //    each X11 window must map to its own unique dbusmenu path; without
+            //    this filter all windows steal the first discovered path and all
+            //    menu clicks go to the same app window.
             // 3. Introspection (discover real exports on /com/canonical/menu) — BEFORE
-            //    unresolved paths to avoid false positives (e.g. gmenudbusmenuproxy
-            //    registering /MenuBar/1 under a different KWin window ID triggering
-            //    IsKnownMenuError on a Chromium connection that has no menu there)
-            // 4. Unresolved registrar paths — Qt apps register with QWindow::winId(),
-            //    which has no _NET_WM_PID so ResolveServiceAsync leaves them with
-            //    Service=null. We've confirmed this connection's PID matches, so try them.
-            // 5. Format guesses (hex/decimal)
+            //    unresolved paths to avoid false positives
+            // 4. Unresolved registrar paths
+            // 5. Claimed paths as last-resort fallback (single-window apps whose path
+            //    was previously stored under a Qt internal window ID)
+            // 6. Format guesses (hex/decimal)
             var candidatePaths = guessPaths ?? [];
             if (guessPaths == null)
             {
-                var resolvedPaths    = registrar.GetPathsForService(name)
-                                           .OrderBy(r => Math.Abs((long)r.RegisteredWindowId - (long)windowId))
-                                           .Select(r => r.Path);
-                var unresolvedPaths  = registrar.GetUnresolvedPaths();
+                // Paths already confirmed for OTHER windows on this bus name.
+                // e.g. Brave window 1 → /com/canonical/menu/1 should not be
+                // used for Brave window 2 even though it probes successfully.
+                var claimedByOtherWindow = windowSources
+                    .Where(kv => kv.Key != windowId
+                              && (kv.Value.Service == name || kv.Value.DbusService == name)
+                              && !string.IsNullOrEmpty(kv.Value.Path ?? kv.Value.DbusPath))
+                    .Select(kv => kv.Value.Path ?? kv.Value.DbusPath!)
+                    .ToHashSet();
 
-                if (unresolvedPaths.Length > 0)
-                    logger.LogInformation("  0x{W:X8}: trying {C} unresolved registrar path(s) on {N}: [{P}]",
-                        windowId, unresolvedPaths.Length, name, string.Join(", ", unresolvedPaths));
+                var allResolvedForService = registrar.GetPathsForService(name)
+                    .OrderBy(r => Math.Abs((long)r.RegisteredWindowId - (long)windowId))
+                    .Select(r => r.Path)
+                    .ToArray();
+
+                // Split: unclaimed paths tried first, already-claimed paths last.
+                var unclaimedResolved = allResolvedForService.Where(p => !claimedByOtherWindow.Contains(p));
+                var claimedResolved   = allResolvedForService.Where(p =>  claimedByOtherWindow.Contains(p));
+
+                var unresolvedPaths  = registrar.GetUnresolvedPaths();
 
                 var introspectTask = DiscoverMenuPathsAsync(connection, name, windowId, cancellationToken);
                 using var introspectCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -1635,9 +1650,10 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                 // via IsKnownMenuError on the wrong path (e.g. /MenuBar/1 on Brave's
                 // connection triggers the "com.canonical.dbusmenu" error but the object
                 // at that path does not actually serve a menu).
-                candidatePaths = resolvedPaths
+                candidatePaths = unclaimedResolved
                     .Concat(introspectedPaths)
                     .Concat(unresolvedPaths)
+                    .Concat(claimedResolved)   // fallback: single-window apps stored under Qt internal ID
                     .Concat(fallbackPaths)
                     .Distinct()
                     .ToArray();
