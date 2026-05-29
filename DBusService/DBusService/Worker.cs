@@ -44,7 +44,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
     {
         // ── Build-identity banner — proves which binary is running ─────────────
         // Update this string whenever you want to confirm a fresh binary is loaded.
-        logger.LogInformation("=== DBusService build: 2026-05-29-v29 (fix: LayoutUpdated persistent-failure re-discovery; IsKnownMenuError rejects broken dbusmenu endpoints) ===");
+        logger.LogInformation("=== DBusService build: 2026-05-29-v30 (fix: depth-2 AboutToShow priming in FetchAndLogMenuAsync — populates lazy submenus e.g. Dolphin Create New) ===");
 
         using var connection = new Connection(Address.Session!);
         await connection.ConnectAsync();
@@ -1841,6 +1841,34 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
         }
 
         if (shallowLayout.Children.Length > 0)
+            await Task.Delay(30, stoppingToken);
+
+        // ── Stage 3b: depth-2 layout — prime lazy submenus (e.g. Dolphin "Create New") ─
+        // The app won't populate a submenu's children until AboutToShow is called for it.
+        // Depth-1 priming (Stage 3) covers File/Edit/View/… but not their children.
+        // This pass covers all IDs reachable at depth 2 so items like "Create New" get populated.
+        static IEnumerable<int> AllIdsInChildren(object[] children)
+        {
+            foreach (var r in children)
+                if (r is ValueTuple<int, IDictionary<string, object>, object[]> n)
+                {
+                    yield return n.Item1;
+                    foreach (var id in AllIdsInChildren(n.Item3))
+                        yield return id;
+                }
+        }
+        var (_, depth2Layout) = await menu.GetLayoutAsync(0, 2, []);
+        foreach (var d2Id in AllIdsInChildren(depth2Layout.Children))
+        {
+            var capturedId = d2Id;
+            _ = menu.AboutToShowAsync(capturedId).ContinueWith(t =>
+            {
+                if (t.IsFaulted)
+                    logger.LogDebug("  [{Service}] AboutToShow({Id}) faulted: {Msg}",
+                        service, capturedId, t.Exception!.InnerException?.Message);
+            }, TaskScheduler.Default);
+        }
+        if (depth2Layout.Children.Length > 0)
             await Task.Delay(30, stoppingToken);
 
         // ── Stage 4: full deep layout ─────────────────────────────────────────
