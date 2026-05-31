@@ -30,6 +30,12 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
     // any of them has written to windowSources.  TryAdd is atomic: the first window wins.
     private readonly ConcurrentDictionary<string, uint> _claimedMenuPaths = new();
 
+    // D-Bus connections that produced only probe timeouts (not fast error responses).
+    // Keyed by unique bus name (e.g. ":1.110"); value is the expiry time after which
+    // the connection is allowed to be probed again.  Prevents apps like VS Code (Electron)
+    // from blocking every FindMenuByPidAsync call with 6+ × 1.5 s timeouts per retry.
+    private readonly ConcurrentDictionary<string, DateTime> _timedOutConnections = new();
+
     // D-Bus bus-name list cache. ListNamesAsync does a full D-Bus round-trip and can be called
     // from FindMenuByPidAsync, ScanConnectionsForMenusAsync, and the prefetch loop in rapid
     // succession during startup or retry storms. Cache for 3 s to avoid redundant round-trips.
@@ -49,7 +55,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
 
     // Tracks which discovery method successfully served a menu for each X11 window.
     // Used to skip the full registrar/X11/PID/poll cycle on subsequent focus events.
-    private enum MenuSourceType { DbusMenu, AtSpi, GtkMenu }
+    private enum MenuSourceType { DbusMenu, AtSpi, GtkMenu, NoMenu }
     private sealed record WindowMenuSource(
         MenuSourceType Type,
         string? Service      = null,   // DBus service name (DbusMenu fast path)
@@ -57,13 +63,14 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
         string? AtSpiBusName = null,   // AT-SPI bus unique name (AtSpi)
         string? DbusService  = null,   // DBus service used for icon merge (AtSpi windows)
         string? DbusPath     = null,   // DBus path used for icon merge (AtSpi windows)
-        IReadOnlyDictionary<int, (string BusName, string Path)>? IdMap = null); // cached for instant re-focus
+        IReadOnlyDictionary<int, (string BusName, string Path)>? IdMap = null, // cached for instant re-focus
+        DateTime NoMenuUntil = default); // NoMenu only: cooldown expiry — watchdog skips until this time
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         // ── Build-identity banner — proves which binary is running ─────────────
         // Update this string whenever you want to confirm a fresh binary is loaded.
-        logger.LogInformation("=== DBusService build: 2026-05-29-v31 (perf: cache MenuLogMode + ListNamesAsync; stability/bug fixes) ===");
+        logger.LogInformation("=== DBusService build: 2026-05-31-v35 (fix: skip exporter clear for NoMenu windows) ===");
 
         using var connection = new Connection(Address.Session!);
         await connection.ConnectAsync();
@@ -247,6 +254,19 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                 var current = exporter.LastMenuJson;
                 if (!string.IsNullOrEmpty(current) && current != "{}") { noMenuTicks = 0; continue; }
 
+                // Skip windows that have been definitively marked as having no menu.
+                // These are apps like VS Code (Electron) that genuinely don't expose a
+                // global menu — retrying them wastes D-Bus calls and causes timeout floods.
+                // The cooldown expires after 5 min, at which point discovery runs once more
+                // in case the app was restarted with a different menu capability.
+                if (windowSources.TryGetValue(activeId, out var noMenuSrc)
+                    && noMenuSrc.Type == MenuSourceType.NoMenu
+                    && DateTime.UtcNow < noMenuSrc.NoMenuUntil)
+                {
+                    noMenuTicks = 0;
+                    continue;
+                }
+
                 noMenuTicks++;
                 if (noMenuTicks < TicksBeforeReset)
                 {
@@ -417,6 +437,20 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
 
                 logger.LogInformation("Active window → 0x{WindowId:X8}  [{Name}]",
                     windowId, windowMonitor.GetWindowName((IntPtr)windowId) ?? "?");
+
+                // ── NoMenu short-circuit ──────────────────────────────────────────────────
+                // If this window is confirmed to have no global menu, skip everything —
+                // including exporter.Update("{}") which would wipe the previous window's menu.
+                // VS Code fires clientActivated every ~3s; without this guard every event
+                // clears whatever Konsole/Dolphin menu was showing.
+                if (windowSources.TryGetValue(windowId, out var noMenuEarlyCheck)
+                    && noMenuEarlyCheck.Type == MenuSourceType.NoMenu
+                    && DateTime.UtcNow < noMenuEarlyCheck.NoMenuUntil)
+                {
+                    logger.LogDebug("  0x{W:X8}: NoMenu (cooldown) — skipping clear", windowId);
+                    continue;
+                }
+
                 exporter.SetDebugContext(windowId);
                 exporter.Update("{}", null);
 
@@ -636,6 +670,15 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                             windowSources.TryRemove(windowId, out _);
                         }
                     }
+                    else if (knownSrc.Type == MenuSourceType.NoMenu
+                             && DateTime.UtcNow < knownSrc.NoMenuUntil)
+                    {
+                        // This window has been confirmed to have no menu (e.g. VS Code/Electron).
+                        // Skip all discovery — returning immediately keeps the main loop
+                        // responsive so other windows' focus events aren't starved out of the channel.
+                        logger.LogDebug("  0x{W:X8}: fast-path NoMenu (cooldown active)", windowId);
+                        continue;
+                    }
                 }
 
                 // ── AT-SPI first: show menu structure immediately ────────────────────────────
@@ -649,6 +692,16 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                     var atspiPid = windowMonitor.GetWindowPid((IntPtr)windowId);
                     if (atspiPid != 0)
                     {
+                        // Skip the 15s blocking AT-SPI scan if a retry task is already running
+                        // for this window.  Repeated focus events (e.g. VS Code firing every 3s
+                        // via KWin's clientActivated) would otherwise block the main loop for 15s
+                        // each time, starving every other window's focus event out of the channel.
+                        if (retryInFlight.ContainsKey(windowId))
+                        {
+                            logger.LogDebug("  0x{W:X8}: retry already in flight — skipping AT-SPI first scan", windowId);
+                            continue;
+                        }
+
                         using var atspiFirstCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
                         atspiFirstCts.CancelAfter(TimeSpan.FromSeconds(15));
                         string? firstScanBusName = null; // captured even when scan returns no menu
@@ -931,12 +984,30 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                                 }
                                 logger.LogDebug("  0x{W:X8}: AT-SPI retry exhausted after {A} attempts — no menu found", retryWinId, attempt);
 
+                                // Mark as definitively no-menu with a 5-minute cooldown.
+                                // The watchdog checks this and skips re-queuing so we don't
+                                // restart the expensive probe cycle for apps like VS Code that
+                                // genuinely have no global menu.
+                                if (!windowSources.ContainsKey(retryWinId))
+                                {
+                                    windowSources[retryWinId] = new WindowMenuSource(
+                                        MenuSourceType.NoMenu,
+                                        NoMenuUntil: DateTime.UtcNow.AddMinutes(5));
+                                    logger.LogInformation(
+                                        "  0x{W:X8}: marked NoMenu — watchdog will skip this window for 5 min", retryWinId);
+                                }
+
                                 // ── Event-driven fallback: subscribe to AT-SPI PropertiesChanged ──────────
                                 // GTK apps (e.g. HandBrake) may realize their GtkMenuBar widget lazily —
                                 // well after the 27 s polling window above.  WatchAppNodeChildrenChangedAsync
                                 // fires the INSTANT ChildCount increases on the application node, so we
                                 // catch the menu bar appearing regardless of timing.
-                                if (retryBusName != null && !windowSources.ContainsKey(retryWinId))
+                                // Allow the watcher even when the window is marked NoMenu — a GTK app
+                                // may lazy-realize its menu bar well after the polling window expires.
+                                // Only skip if the window was positively resolved to a real menu.
+                                var isResolvedToMenu = windowSources.TryGetValue(retryWinId, out var resolvedSrc)
+                                    && resolvedSrc.Type != MenuSourceType.NoMenu;
+                                if (retryBusName != null && !isResolvedToMenu)
                                 {
                                     logger.LogDebug("  0x{W:X8}: subscribing to AT-SPI ChildCount watcher on {Bus}", retryWinId, retryBusName);
                                     try
@@ -1697,6 +1768,20 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
         {
             if (cancellationToken.IsCancellationRequested) break;
 
+            // ── Connection timeout blacklist ──────────────────────────────────
+            // If this connection produced only probe timeouts last time (no fast
+            // error or success), skip it until the cooldown expires.  This prevents
+            // apps like VS Code (Electron) from blocking FindMenuByPidAsync with
+            // 6+ × 1.5 s timeouts on every retry attempt.
+            if (_timedOutConnections.TryGetValue(name, out var blacklistedUntil)
+                && DateTime.UtcNow < blacklistedUntil)
+            {
+                logger.LogDebug(
+                    "  0x{W:X8}: skipping {N} — connection timeout-blacklisted for {S:F0}s",
+                    windowId, name, (blacklistedUntil - DateTime.UtcNow).TotalSeconds);
+                continue;
+            }
+
             logger.LogInformation("  0x{W:X8}: PID={Pid} — probing connection {N}", windowId, pid, name);
 
             // ── Build candidate list ──────────────────────────────────────────
@@ -1742,6 +1827,18 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                 introspectCts.CancelAfter(TimeSpan.FromMilliseconds(800));
                 await Task.WhenAny(introspectTask, Task.Delay(Timeout.Infinite, introspectCts.Token));
                 var introspectedPaths = introspectTask.IsCompletedSuccessfully ? introspectTask.Result : [];
+
+                // If the introspect itself timed out the connection is hanging on all D-Bus
+                // calls (e.g. VS Code's :1.110).  Blacklist it immediately instead of
+                // burning through 6 × 1.5 s probe timeouts for every candidate path.
+                if (!introspectTask.IsCompleted)
+                {
+                    logger.LogInformation(
+                        "  0x{W:X8}: introspect timed out on {N} — blacklisting immediately",
+                        windowId, name);
+                    _timedOutConnections[name] = DateTime.UtcNow.AddMinutes(5);
+                    continue;  // skip candidate probing for this connection
+                }
 
                 if (introspectedPaths.Length > 0)
                     logger.LogInformation("  0x{W:X8}: introspect found {C} path(s) on {N}: [{P}]",
@@ -1819,6 +1916,8 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
             // ── Probe each candidate ──────────────────────────────────────────
             // CRITICAL: GetLayoutAsync has no CancellationToken overload — wrap in
             // Task.WhenAny so the timeout is actually enforced.
+            int probeTimeouts  = 0;  // probes that timed out (no fast response)
+            int probeResponses = 0;  // probes that got any response (success or fast error)
             foreach (var candidatePath in candidatePaths)
             {
                 // Atomic claim check: for multi-window apps (Brave/Chromium) multiple
@@ -1849,6 +1948,7 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                     await Task.WhenAny(probeTask, Task.Delay(Timeout.Infinite, probe.Token));
                     if (probeTask.IsCompletedSuccessfully || probeTask.IsFaulted && IsKnownMenuError(probeTask.Exception))
                     {
+                        probeResponses++;
                         // Either got a valid bool response, OR got a dbusmenu-specific error
                         // (e.g. invalid id) which still proves the object exists at this path.
                         if (probeTask.IsCompletedSuccessfully)
@@ -1872,14 +1972,35 @@ public class Worker(ILogger<Worker> logger, GlobalMenuExporter exporter, IConfig
                         return (name, candidatePath);
                     }
                     if (!probeTask.IsCompleted)
+                    {
+                        probeTimeouts++;
                         logger.LogInformation("  0x{W:X8}: probe timed out on {N} at {P}", windowId, name, candidatePath);
+                        break;  // connection is hanging — no point probing remaining paths
+                    }
                     else
+                    {
+                        probeResponses++;
                         logger.LogInformation("  0x{W:X8}: probe failed on {N} at {P}: {E}", windowId, name, candidatePath, probeTask.Exception?.InnerException?.Message);
+                    }
                 }
                 catch (Exception ex)
                 {
+                    probeResponses++;
                     logger.LogInformation("  0x{W:X8}: probe exception on {N} at {P}: {E}", windowId, name, candidatePath, ex.Message);
                 }
+            }
+
+            // ── Blacklist connections that only produce timeouts ───────────────
+            // If every probe on this connection timed out and none responded quickly,
+            // this app (e.g. VS Code/Electron) hangs on every D-Bus call rather than
+            // returning a fast error.  Blacklist for 5 min so future FindMenuByPidAsync
+            // calls skip it entirely instead of burning through 1.5s per path.
+            if (probeTimeouts > 0 && probeResponses == 0)
+            {
+                _timedOutConnections[name] = DateTime.UtcNow.AddMinutes(5);
+                logger.LogInformation(
+                    "  0x{W:X8}: connection {N} blacklisted for 5 min ({T} timeouts, 0 responses)",
+                    windowId, name, probeTimeouts);
             }
 
         }

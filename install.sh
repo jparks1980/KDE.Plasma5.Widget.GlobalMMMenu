@@ -114,6 +114,16 @@ install_plasmoid() {
     fi
 
     # Register with KDE
+    # Plasma discovers plasmoids by directory name, so create a symlink from
+    # the canonical ID directory → the actual com.github.globalmmmenu directory.
+    local canonical_dir="$HOME/.local/share/plasma/plasmoids/com.github.globalmmmenu"
+    local id_link="$HOME/.local/share/plasma/plasmoids/$PLASMOID_ID"
+    if [[ ! -e "$id_link" || "$(readlink "$id_link")" != "$canonical_dir" ]]; then
+        ln -sfn "$canonical_dir" "$id_link"
+        info "Created symlink: $id_link → $canonical_dir"
+    fi
+    kbuildsycoca5 --noincremental 2>/dev/null || true
+
     if kpackagetool5 --list --type Plasma/Applet 2>/dev/null | grep -q "$PLASMOID_ID"; then
         info "Upgrading existing plasmoid registration..."
         kpackagetool5 --upgrade "$plasmoid_dest" --type Plasma/Applet 2>/dev/null || true
@@ -175,8 +185,8 @@ install_systemd() {
     info "Enabling service (auto-start on graphical login)..."
     systemctl --user enable globalmmmenu.service
 
-    info "Starting service now..."
-    systemctl --user start globalmmmenu.service
+    info "Restarting service..."
+    systemctl --user restart globalmmmenu.service
 
     if systemctl --user is-active --quiet globalmmmenu.service; then
         success "Service is running."
@@ -228,6 +238,23 @@ main() {
             check_deps
             install_service
             install_systemd
+            # Also sync QML and metadata to the running plasmoid (both known install locations).
+            for plasmoid_dest_dir in \
+                "$HOME/.local/share/plasma/plasmoids/$PLASMOID_ID" \
+                "$HOME/.local/share/plasma/plasmoids/com.github.globalmmmenu"; do
+                if [[ -d "$plasmoid_dest_dir/contents/ui" ]]; then
+                    cp "$PLASMOID_DIR/contents/ui/main.qml" "$plasmoid_dest_dir/contents/ui/main.qml"
+                    cp "$PLASMOID_DIR/metadata.json" "$plasmoid_dest_dir/metadata.json"
+                    info "Synced QML + metadata → $plasmoid_dest_dir"
+                fi
+            done
+            # Ensure symlink exists so Plasma finds the plugin by its canonical ID
+            local canonical_dir="$HOME/.local/share/plasma/plasmoids/com.github.globalmmmenu"
+            local id_link="$HOME/.local/share/plasma/plasmoids/$PLASMOID_ID"
+            if [[ ! -e "$id_link" || "$(readlink "$id_link")" != "$canonical_dir" ]]; then
+                ln -sfn "$canonical_dir" "$id_link"
+                info "Created symlink: $id_link → $canonical_dir"
+            fi
             ;;
         --uninstall)
             do_uninstall
