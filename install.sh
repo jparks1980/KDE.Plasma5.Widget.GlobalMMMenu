@@ -37,19 +37,43 @@ success() { echo -e "${GREEN}[OK]${NC}    $*"; }
 warn()    { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 die()     { echo -e "${RED}[ERROR]${NC} $*"; exit 1; }
 
+# ── Plasma version detection ─────────────────────────────────────────────────
+# Returns 6 for Plasma 6+, 5 otherwise.
+get_plasma_major() {
+    local ver
+    ver=$(plasmashell --version 2>/dev/null | grep -oP '\d+' | head -1)
+    echo "${ver:-5}"
+}
+PLASMA_MAJOR=$(get_plasma_major)
+info "Detected Plasma ${PLASMA_MAJOR}"
+
+# kpackagetool: Plasma 6 ships kpackagetool6; Plasma 5 uses kpackagetool5.
+if [[ $PLASMA_MAJOR -ge 6 ]]; then
+    KPACKAGETOOL=$(command -v kpackagetool6 2>/dev/null || command -v kpackagetool5 2>/dev/null || echo "")
+else
+    KPACKAGETOOL=$(command -v kpackagetool5 2>/dev/null || echo "")
+fi
+
 # ── Dependency checks ─────────────────────────────────────────────────────────
 check_deps() {
     local missing=()
-    for cmd in cmake make dotnet kpackagetool5 plasmashell; do
+    for cmd in cmake make dotnet plasmashell; do
         command -v "$cmd" &>/dev/null || missing+=("$cmd")
     done
+    [[ -z "$KPACKAGETOOL" ]] && missing+=("kpackagetool5 or kpackagetool6")
     if [[ ${#missing[@]} -gt 0 ]]; then
         die "Missing required tools: ${missing[*]}\n  Run: sudo apt install cmake build-essential dotnet-sdk-10"
     fi
 
-    # Qt5 dev libraries
-    if ! pkg-config --exists Qt5Qml Qt5Quick Qt5Gui Qt5Widgets 2>/dev/null; then
-        die "Qt5 development libraries not found.\n  Run: sudo apt install qtbase5-dev qtdeclarative5-dev"
+    # Qt dev libraries — check for Qt6 first (Plasma 6), fall back to Qt5
+    if [[ $PLASMA_MAJOR -ge 6 ]]; then
+        if ! dpkg -l qt6-base-dev qt6-declarative-dev &>/dev/null 2>&1; then
+            die "Qt6 development libraries not found.\n  Run: sudo apt install qt6-base-dev qt6-declarative-dev"
+        fi
+    else
+        if ! pkg-config --exists Qt5Qml Qt5Quick Qt5Gui Qt5Widgets 2>/dev/null; then
+            die "Qt5 development libraries not found.\n  Run: sudo apt install qtbase5-dev qtdeclarative5-dev"
+        fi
     fi
 
     # appmenu-registrar (GTK app menu support)
@@ -66,8 +90,9 @@ install_plugin() {
     local build_dir="$PLUGIN_DIR/build"
     mkdir -p "$build_dir"
 
-    info "Running cmake..."
-    cmake -S "$PLUGIN_DIR" -B "$build_dir" -DCMAKE_BUILD_TYPE=Release
+    info "Running cmake (Qt${PLASMA_MAJOR})..."
+    cmake -S "$PLUGIN_DIR" -B "$build_dir" -DCMAKE_BUILD_TYPE=Release \
+        -DQT_MAJOR_VERSION="$PLASMA_MAJOR"
 
     info "Building..."
     make -C "$build_dir" -j"$(nproc)"
@@ -104,13 +129,22 @@ install_plasmoid() {
     local qml_bundle="$plasmoid_dest/com/kde/plasma/globalmenu"
     mkdir -p "$qml_bundle"
     local system_qml
-    system_qml="$(qmake -query QT_INSTALL_QML 2>/dev/null)/com/kde/plasma/globalmenu"
-    if [[ -f "$system_qml/libglobalmenuhelper.so" ]]; then
-        cp "$system_qml/libglobalmenuhelper.so" "$qml_bundle/"
-        cp "$PLUGIN_DIR/qmldir" "$qml_bundle/"
-        success "Bundled QML plugin into plasmoid."
+    # Prefer build output; fall back to system QML path
+    local build_so="$PLUGIN_DIR/build/libglobalmenuhelper.so"
+    if [[ $PLASMA_MAJOR -ge 6 ]]; then
+        system_qml="/usr/lib/x86_64-linux-gnu/qt6/qml/com/kde/plasma/globalmenu"
     else
-        warn "System QML plugin not found at $system_qml — run --plugin first, or full install."
+        system_qml="$(qmake -query QT_INSTALL_QML 2>/dev/null)/com/kde/plasma/globalmenu"
+    fi
+    local so_src=""
+    [[ -f "$build_so" ]] && so_src="$build_so"
+    [[ -z "$so_src" && -f "$system_qml/libglobalmenuhelper.so" ]] && so_src="$system_qml/libglobalmenuhelper.so"
+    if [[ -n "$so_src" ]]; then
+        cp "$so_src" "$qml_bundle/"
+        cp "$PLUGIN_DIR/qmldir" "$qml_bundle/"
+        success "Bundled QML plugin into plasmoid from $so_src"
+    else
+        warn "libglobalmenuhelper.so not found — run --plugin first, or full install."
     fi
 
     # Register with KDE
@@ -122,14 +156,20 @@ install_plasmoid() {
         ln -sfn "$canonical_dir" "$id_link"
         info "Created symlink: $id_link → $canonical_dir"
     fi
-    kbuildsycoca5 --noincremental 2>/dev/null || true
 
-    if kpackagetool5 --list --type Plasma/Applet 2>/dev/null | grep -q "$PLASMOID_ID"; then
+    # Rebuild KDE service cache (Plasma 5: kbuildsycoca5; Plasma 6: kbuildsycoca6)
+    if [[ $PLASMA_MAJOR -ge 6 ]]; then
+        kbuildsycoca6 --noincremental 2>/dev/null || true
+    else
+        kbuildsycoca5 --noincremental 2>/dev/null || true
+    fi
+
+    if "$KPACKAGETOOL" --list --type Plasma/Applet 2>/dev/null | grep -q "$PLASMOID_ID"; then
         info "Upgrading existing plasmoid registration..."
-        kpackagetool5 --upgrade "$plasmoid_dest" --type Plasma/Applet 2>/dev/null || true
+        "$KPACKAGETOOL" --upgrade "$plasmoid_dest" --type Plasma/Applet 2>/dev/null || true
     else
         info "Registering plasmoid with KDE..."
-        kpackagetool5 --install "$plasmoid_dest" --type Plasma/Applet 2>/dev/null || true
+        "$KPACKAGETOOL" --install "$plasmoid_dest" --type Plasma/Applet 2>/dev/null || true
     fi
 
     success "Plasmoid installed."
@@ -210,13 +250,15 @@ do_uninstall() {
 
     # Remove plasmoid
     local plasmoid_dest="$HOME/.local/share/plasma/plasmoids/$PLASMOID_ID"
-    kpackagetool5 --remove "$PLASMOID_ID" --type Plasma/Applet 2>/dev/null || true
+    "$KPACKAGETOOL" --remove "$PLASMOID_ID" --type Plasma/Applet 2>/dev/null || true
     [[ -d "$plasmoid_dest" ]] && rm -rf "$plasmoid_dest" && success "Removed plasmoid"
 
-    # Remove system QML plugin
-    local qml_dir
-    qml_dir="$(qmake -query QT_INSTALL_QML 2>/dev/null)/com/kde/plasma/globalmenu"
-    [[ -d "$qml_dir" ]] && sudo rm -rf "$qml_dir" && success "Removed system QML plugin"
+    # Remove system QML plugin (Qt5 and Qt6 paths)
+    local qml_dir5 qml_dir6
+    qml_dir5="$(qmake -query QT_INSTALL_QML 2>/dev/null)/com/kde/plasma/globalmenu"
+    qml_dir6="/usr/lib/x86_64-linux-gnu/qt6/qml/com/kde/plasma/globalmenu"
+    [[ -d "$qml_dir5" ]] && sudo rm -rf "$qml_dir5" && success "Removed Qt5 system QML plugin"
+    [[ -d "$qml_dir6" ]] && sudo rm -rf "$qml_dir6" && success "Removed Qt6 system QML plugin"
 
     success "Uninstall complete. Restart plasmashell: plasmashell --replace &"
 }

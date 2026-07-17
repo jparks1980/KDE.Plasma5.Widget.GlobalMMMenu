@@ -4,13 +4,9 @@
 
 #include <qqml.h>
 #include <QQmlEngine>
-#include <QFile>
-#include <QTextStream>
-#include <QDateTime>
 
 // Module-global provider. Created once when the engine initialises this plugin.
-// GlobalMenuHelper instances call setIconProvider() on construction via the
-// static accessor below.
+// GlobalMenuHelper instances auto-wire to it via the static accessor.
 static GlobalMenuIconProvider *s_iconProvider = nullptr;
 
 GlobalMenuIconProvider *GlobalMenuHelper::iconProvider()
@@ -27,13 +23,7 @@ void GlobalMenuHelperPlugin::initializeEngine(QQmlEngine *engine, const char *ur
 {
     Q_UNUSED(uri)
     s_iconProvider = new GlobalMenuIconProvider();
-    // Ownership is transferred to the engine — it deletes the provider on teardown.
+    // Ownership transferred to the engine — deleted on teardown.
     engine->addImageProvider(QStringLiteral("globalmenuicons"), s_iconProvider);
-
-    // Startup diagnostic — confirms the plugin is actually loaded.
-    QFile dbg("/tmp/gmm_debug.txt");
-    if (dbg.open(QIODevice::Append | QIODevice::Text)) {
-        QTextStream s(&dbg);
-        s << "=== GlobalMenuHelper plugin loaded at " << QDateTime::currentDateTime().toString() << "\n";
-    }
 }
+

@@ -2,10 +2,17 @@
 #include "iconprovider.h"
 
 #include <QCursor>
+#include <QDBusArgument>
+#include <QDBusConnection>
 #include <QDBusInterface>
+#include <QDBusMessage>
+#include <QDBusReply>
 #include <QDebug>
 #include <QFile>
 #include <QIcon>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
 #include <QKeySequence>
 #include <QMenu>
 #include <QPixmap>
@@ -19,10 +26,19 @@
 GlobalMenuHelper::GlobalMenuHelper(QObject *parent)
     : QObject(parent)
 {
-    m_pollTimer.setInterval(50);
-    connect(&m_pollTimer, &QTimer::timeout, this, &GlobalMenuHelper::poll);
+    m_hoverTimer.setInterval(50);
+    connect(&m_hoverTimer, &QTimer::timeout, this, &GlobalMenuHelper::poll);
+
+    m_serviceTimer.setInterval(300);
+    connect(&m_serviceTimer, &QTimer::timeout, this, &GlobalMenuHelper::onServicePollTimer);
+
     // Auto-wire to the module-global provider registered by the plugin.
     m_iconProvider = iconProvider();
+}
+
+GlobalMenuHelper::~GlobalMenuHelper()
+{
+    disconnectDirectMenu();
 }
 
 void GlobalMenuHelper::setIconProvider(GlobalMenuIconProvider *provider)
@@ -48,9 +64,9 @@ void GlobalMenuHelper::setMenuOpen(bool open)
         return;
     m_menuOpen = open;
     if (open)
-        m_pollTimer.start();
+        m_hoverTimer.start();
     else
-        m_pollTimer.stop();
+        m_hoverTimer.stop();
     emit menuOpenChanged();
 }
 
@@ -83,8 +99,6 @@ void GlobalMenuHelper::poll()
         if (!btn || !btn->isVisible() || btn->width() <= 0)
             continue;
 
-        // mapToGlobal maps the item's (0,0) to screen-global logical pixels —
-        // the same space QCursor::pos() uses, including HiDPI scaling.
         const QPointF topLeft = btn->mapToGlobal(QPointF(0, 0));
         const QRectF  rect(topLeft, QSizeF(btn->width(), btn->height()));
 
@@ -95,77 +109,286 @@ void GlobalMenuHelper::poll()
     }
 }
 
-// ---------------------------------------------------------------------------
-// Native QMenu / QAction implementation
-// ---------------------------------------------------------------------------
+// ── Direct mode: stock-GlobalMenu-style D-Bus menu reading ───────────────────
+
+/**
+ * Connect directly to a window's advertised dbusmenu service (borrow logic
+ * from KDE's stock GlobalMenu widget / AppMenuModel).
+ *
+ * This path requires no C# service involvement — we call GetLayout on the
+ * application's own menu service, subscribe to LayoutUpdated for reactivity,
+ * and route action execution directly via the DBusMenu Event method.
+ *
+ * Called by QML's TasksModel handler when ApplicationMenuServiceName and
+ * ApplicationMenuObjectPath are both available for the active task.
+ */
+void GlobalMenuHelper::connectDirectMenu(const QString &service, const QString &path)
+{
+    // Disconnect from any previous direct menu first
+    if (!m_directMenuService.isEmpty()) {
+        QDBusConnection::sessionBus().disconnect(
+            m_directMenuService, m_directMenuPath,
+            QStringLiteral("com.canonical.dbusmenu"),
+            QStringLiteral("LayoutUpdated"),
+            this, SLOT(onLayoutUpdated(uint,int)));
+    }
+
+    // Stop the C# service fallback timer if it was running
+    m_serviceTimer.stop();
+
+    m_directMenuService = service;
+    m_directMenuPath    = path;
+    m_directMode        = true;
+    emit directModeChanged();
+
+    // Subscribe to LayoutUpdated for reactive menu refreshes
+    QDBusConnection::sessionBus().connect(
+        service, path,
+        QStringLiteral("com.canonical.dbusmenu"),
+        QStringLiteral("LayoutUpdated"),
+        this, SLOT(onLayoutUpdated(uint,int)));
+
+    // Fetch the menu now
+    fetchDirectMenu();
+}
+
+void GlobalMenuHelper::disconnectDirectMenu()
+{
+    if (!m_directMenuService.isEmpty()) {
+        QDBusConnection::sessionBus().disconnect(
+            m_directMenuService, m_directMenuPath,
+            QStringLiteral("com.canonical.dbusmenu"),
+            QStringLiteral("LayoutUpdated"),
+            this, SLOT(onLayoutUpdated(uint,int)));
+    }
+    m_directMenuService.clear();
+    m_directMenuPath.clear();
+
+    if (m_directMode) {
+        m_directMode = false;
+        emit directModeChanged();
+    }
+
+    if (m_menuJson != QLatin1String("{}")) {
+        m_menuJson = QStringLiteral("{}");
+        emit menuJsonChanged();
+    }
+}
+
+void GlobalMenuHelper::onLayoutUpdated(uint /*revision*/, int /*parentId*/)
+{
+    fetchDirectMenu();
+}
+
+/**
+ * Call com.canonical.dbusmenu GetLayout on the direct menu service and convert
+ * the reply to the same JSON schema the C# service uses.  Updates menuJson.
+ */
+void GlobalMenuHelper::fetchDirectMenu()
+{
+    if (m_directMenuService.isEmpty() || m_directMenuPath.isEmpty())
+        return;
+
+    QDBusInterface iface(
+        m_directMenuService, m_directMenuPath,
+        QStringLiteral("com.canonical.dbusmenu"),
+        QDBusConnection::sessionBus());
+
+    if (!iface.isValid())
+        return;
+
+    // GetLayout(parentId=0, recursionDepth=-1, propertyNames=[]) 
+    // returns (uint revision, (int id, a{sv} props, av children))
+    QDBusMessage reply = iface.call(
+        QStringLiteral("GetLayout"), 0, -1, QStringList());
+
+    if (reply.type() != QDBusMessage::ReplyMessage || reply.arguments().isEmpty())
+        return;
+
+    // reply.arguments()[0] = uint revision (skip)
+    // reply.arguments()[1] = QDBusArgument holding (i, a{sv}, av)
+    const QDBusArgument layoutArg = reply.arguments().at(1).value<QDBusArgument>();
+
+    QVariantMap rootMap = parseDbusMenuNode(layoutArg);
+
+    // Build JSON matching the C# service schema
+    QJsonObject root;
+    root[QStringLiteral("label")]    = rootMap.value(QStringLiteral("label")).toString();
+    root[QStringLiteral("id")]       = rootMap.value(QStringLiteral("id")).toInt();
+
+    const QVariantList children = rootMap.value(QStringLiteral("children")).toList();
+    QJsonArray childArray;
+    for (const QVariant &child : children) {
+        childArray.append(QJsonObject::fromVariantMap(child.toMap()));
+    }
+    root[QStringLiteral("children")] = childArray;
+
+    const QString json = QJsonDocument(root).toJson(QJsonDocument::Compact);
+    if (json != m_menuJson) {
+        m_menuJson = json;
+        emit menuJsonChanged();
+    }
+}
+
+/**
+ * Recursively parse a com.canonical.dbusmenu layout node from a QDBusArgument.
+ * The D-Bus signature is (i, a{sv}, av) where each av element is another
+ * QDBusVariant wrapping a further (i, a{sv}, av).
+ */
+QVariantMap GlobalMenuHelper::parseDbusMenuNode(const QDBusArgument &arg)
+{
+    QVariantMap result;
+
+    arg.beginStructure();
+
+    int id = 0;
+    arg >> id;
+    result[QStringLiteral("id")] = id;
+
+    // Properties: a{sv}
+    QVariantMap props;
+    arg >> props;
+
+    const QString label   = props.value(QStringLiteral("label")).toString();
+    const QString type    = props.value(QStringLiteral("type")).toString();
+    const bool    enabled = props.value(QStringLiteral("enabled"), true).toBool();
+    const bool    visible = props.value(QStringLiteral("visible"), true).toBool();
+    const QString iconName = props.value(QStringLiteral("icon-name")).toString();
+
+    result[QStringLiteral("label")]   = label;
+    result[QStringLiteral("enabled")] = enabled;
+    result[QStringLiteral("visible")] = visible;
+    if (!type.isEmpty())
+        result[QStringLiteral("type")] = type;
+    if (!iconName.isEmpty())
+        result[QStringLiteral("icon-name")] = iconName;
+
+    // Handle shortcuts: dbusmenu stores as "shortcut" a{sv} value
+    if (props.contains(QStringLiteral("shortcut"))) {
+        result[QStringLiteral("shortcut")] = props[QStringLiteral("shortcut")];
+    }
+
+    // Children: av, each element is a QDBusVariant wrapping (i, a{sv}, av)
+    QVariantList childrenList;
+    arg.beginArray();
+    while (!arg.atEnd()) {
+        QDBusVariant childDbusVar;
+        arg >> childDbusVar;
+        const QDBusArgument childArg = childDbusVar.variant().value<QDBusArgument>();
+        QVariantMap childMap = parseDbusMenuNode(childArg);
+        if (childMap.value(QStringLiteral("visible"), true).toBool())
+            childrenList.append(childMap);
+    }
+    arg.endArray();
+
+    if (!childrenList.isEmpty())
+        result[QStringLiteral("children")] = childrenList;
+
+    arg.endStructure();
+    return result;
+}
+
+// ── Service mode: fallback polling of the C# GlobalMMMenu service ─────────────
+
+void GlobalMenuHelper::startServicePolling()
+{
+    disconnectDirectMenu();   // ensure direct mode is off
+    m_serviceTimer.start();
+    // Fetch immediately so the first render doesn't wait 300 ms
+    onServicePollTimer();
+}
+
+void GlobalMenuHelper::stopServicePolling()
+{
+    m_serviceTimer.stop();
+}
+
+void GlobalMenuHelper::onServicePollTimer()
+{
+    QDBusInterface iface(
+        QStringLiteral("com.kde.GlobalMMMenu"),
+        QStringLiteral("/com/kde/GlobalMMMenu"),
+        QStringLiteral("com.kde.GlobalMMMenu"),
+        QDBusConnection::sessionBus());
+
+    if (!iface.isValid())
+        return;
+
+    QDBusReply<QString> reply = iface.call(QStringLiteral("GetActiveMenuJson"));
+    if (!reply.isValid())
+        return;
+
+    const QString json = reply.value().trimmed();
+    if (json.length() > 2 && json != m_menuJson) {
+        m_menuJson = json;
+        emit menuJsonChanged();
+    } else if (json.length() <= 2 && !m_menuJson.isEmpty()) {
+        m_menuJson.clear();
+        emit menuJsonChanged();
+    }
+}
+
+// ── Native QMenu / QAction display ───────────────────────────────────────────
 
 void GlobalMenuHelper::openNativeMenu(QQuickItem *anchor, const QVariantMap &node)
 {
-    {
-        QFile dbg("/tmp/gmm_debug.txt");
-        if (dbg.open(QIODevice::Append | QIODevice::Text)) {
-            QTextStream s(&dbg);
-            s << "=== openNativeMenu called, node label=" << node.value("label").toString()
-              << "  keys=" << node.keys().join(",") << "\n";
-        }
+    // Notify the application that this menu is about to be shown.
+    // Required by the dbusmenu protocol so dynamic menus can populate themselves
+    // and so the app tracks which items are "open" for Event() delivery.
+    if (m_directMode && !m_directMenuService.isEmpty()) {
+        const int parentId = node.value(QStringLiteral("id"), 0).toInt();
+        QDBusInterface abIface(m_directMenuService, m_directMenuPath,
+            QStringLiteral("com.canonical.dbusmenu"),
+            QDBusConnection::sessionBus());
+        abIface.call(QDBus::NoBlock, QStringLiteral("AboutToShow"), parentId);
     }
 
-    QMenu *menu = buildNativeMenu(node);
+    QMenu *menu = buildNativeMenu(node, m_directMode);
 
-    // Update m_nativeMenu BEFORE closing old so that old menu's aboutToHide
-    // signal sees a different pointer and doesn't emit menuHidden().
     QPointer<QMenu> oldMenu = m_nativeMenu;
     m_nativeMenu = menu;
 
     if (oldMenu)
         oldMenu->close();
 
-    // Compute screen position from the anchor QQuickItem.
-    // QQuickItem::mapToGlobal() is the correct cross-platform way: it handles
-    // the local→scene→window→screen chain including HiDPI and Wayland offsets.
     QPoint screenPos;
     if (anchor) {
         QPointF global = anchor->mapToGlobal(QPointF(0, 0));
         screenPos = global.toPoint();
     }
 
-    // ── Wayland: make QMenu a transient popup, not a top-level window ──────
-    // On Wayland, a QMenu without a transient parent is treated as an
-    // xdg_toplevel by KWin and gets a full title bar + window decorations.
-    // Calling winId() forces QWindow creation, then setTransientParent() tells
-    // the compositor this is a popup that belongs to the panel window.
-    // On X11 this sets WM_TRANSIENT_FOR which is correct and harmless.
+    // Wayland: make QMenu a transient popup so the compositor treats it as
+    // a panel popup rather than a full xdg_toplevel with title bar.
     if (anchor && anchor->window()) {
-        menu->winId(); // ensures windowHandle() is non-null
+        menu->winId();
         if (QWindow *menuWin = menu->windowHandle())
             menuWin->setTransientParent(anchor->window());
     }
 
     auto *capturedMenu = menu;
-    connect(menu, &QMenu::aboutToHide, this, [this, capturedMenu]() {
+    const bool directNow = m_directMode;
+    connect(menu, &QMenu::aboutToHide, this, [this, capturedMenu, directNow]() {
         if (m_nativeMenu == capturedMenu) {
             m_nativeMenu = nullptr;
-            // Notify the D-Bus service that the popup is closing so it can unfreeze
-            // its active proxy. Must happen AFTER any triggered item's ExecuteItem
-            // D-Bus call completes — the service unfreezes in ExecuteItemAsync itself,
-            // so this call here is just the fallback for "menu closed without clicking".
-            QDBusInterface iface(
-                QStringLiteral("com.kde.GlobalMMMenu"),
-                QStringLiteral("/com/kde/GlobalMMMenu"),
-                QStringLiteral("com.kde.GlobalMMMenu"));
-            iface.call(QDBus::NoBlock, QStringLiteral("SetMenuOpen"), false);
+            if (!directNow) {
+                // Notify the C# service that the popup is closing so it can
+                // unfreeze its active proxy (fallback / service mode only).
+                QDBusInterface iface(
+                    QStringLiteral("com.kde.GlobalMMMenu"),
+                    QStringLiteral("/com/kde/GlobalMMMenu"),
+                    QStringLiteral("com.kde.GlobalMMMenu"));
+                iface.call(QDBus::NoBlock, QStringLiteral("SetMenuOpen"), false);
+            }
             emit menuHidden();
         }
     });
 
-    // Freeze the D-Bus service's active proxy BEFORE the popup opens.
-    // On Wayland, opening the panel's QMenu popup causes the underlying app
-    // (e.g. Brave) to re-focus its last-internally-active window, which fires
-    // KWin clientActivated for that window. Without the freeze, the service would
-    // overwrite _activeMenu/_atspiIdMap with that window's proxy before the user clicks an item.
-    // MUST be a blocking call (QDBus::Block) so the freeze is in effect before menu->popup()
-    // fires Wayland focus events — QProcess::startDetached was async and lost this race.
-    {
+    if (!directNow) {
+        // Freeze the C# service's active proxy BEFORE the popup opens.
+        // On Wayland, opening the panel popup causes the app to re-focus its
+        // last-active window which fires KWin windowActivated.  Without the
+        // freeze the service would overwrite _activeMenu before the user clicks.
+        // Must be blocking so the freeze is in effect before menu->popup().
         QDBusInterface iface(
             QStringLiteral("com.kde.GlobalMMMenu"),
             QStringLiteral("/com/kde/GlobalMMMenu"),
@@ -176,36 +399,16 @@ void GlobalMenuHelper::openNativeMenu(QQuickItem *anchor, const QVariantMap &nod
     menu->popup(screenPos);
 }
 
-QMenu *GlobalMenuHelper::buildNativeMenu(const QVariantMap &node)
+/**
+ * Build a native QMenu from a JSON-like QVariantMap node.
+ * In direct mode, action triggers call com.canonical.dbusmenu Event directly.
+ * In service mode, action triggers call com.kde.GlobalMMMenu ExecuteItem.
+ */
+QMenu *GlobalMenuHelper::buildNativeMenu(const QVariantMap &node, bool isDirectMode)
 {
     auto *menu = new QMenu();
 
     const QVariantList children = node.value(QStringLiteral("children")).toList();
-
-    // Write debug info to a file for easy inspection
-    QFile dbg("/tmp/gmm_debug.txt");
-    if (dbg.open(QIODevice::Append | QIODevice::Text)) {
-        QTextStream s(&dbg);
-        s << "=== buildNativeMenu: " << node.value("label").toString()
-          << "  children=" << children.size()
-          << "  iconTheme=" << QIcon::themeName()
-          << "  searchPaths=" << QIcon::themeSearchPaths().join(":")
-          << "  testIcon=" << (QIcon::fromTheme("document-open").isNull() ? "NULL" : "OK")
-          << "\n";
-        for (const QVariant &cv : children) {
-            const QVariantMap c = cv.toMap();
-            const QString iname = c.value("icon-name").toString();
-            const QString idata = c.value("icon-data").toString();
-            const bool themeOk = !iname.isEmpty() && !QIcon::fromTheme(iname).isNull();
-            const bool dataOk  = !idata.isEmpty();
-            s << "  [" << c.value("id").toInt() << "] "
-              << c.value("label").toString()
-              << "  icon-name=" << iname
-              << "  themeOk=" << (themeOk ? "YES" : "NO")
-              << "  has-icon-data=" << (dataOk ? "YES" : "NO")
-              << "\n";
-        }
-    }
 
     for (const QVariant &childVar : children) {
         const QVariantMap child = childVar.toMap();
@@ -223,7 +426,6 @@ QMenu *GlobalMenuHelper::buildNativeMenu(const QVariantMap &node)
         const QVariantList subkids     = child.value(QStringLiteral("children")).toList();
         const QVariantList shortcutRaw = child.value(QStringLiteral("shortcut")).toList();
 
-        // Prefer theme icon; fall back to inline PNG bytes from DBusMenu icon-data.
         QIcon icon;
         if (!iconName.isEmpty())
             icon = QIcon::fromTheme(iconName);
@@ -234,7 +436,7 @@ QMenu *GlobalMenuHelper::buildNativeMenu(const QVariantMap &node)
         }
 
         if (!subkids.isEmpty()) {
-            QMenu *sub = buildNativeMenu(child);
+            QMenu *sub = buildNativeMenu(child, isDirectMode);
             sub->setTitle(label);
             if (!icon.isNull()) {
                 sub->setIcon(icon);
@@ -256,10 +458,10 @@ QMenu *GlobalMenuHelper::buildNativeMenu(const QVariantMap &node)
                     QString key;
                     for (const QVariant &part : combo) {
                         const QString token = part.toString();
-                        if (token == QLatin1String("Control"))    modifiers |= Qt::ControlModifier;
-                        else if (token == QLatin1String("Shift"))  modifiers |= Qt::ShiftModifier;
-                        else if (token == QLatin1String("Alt"))    modifiers |= Qt::AltModifier;
-                        else if (token == QLatin1String("Super"))  modifiers |= Qt::MetaModifier;
+                        if (token == QLatin1String("Control"))   modifiers |= Qt::ControlModifier;
+                        else if (token == QLatin1String("Shift")) modifiers |= Qt::ShiftModifier;
+                        else if (token == QLatin1String("Alt"))   modifiers |= Qt::AltModifier;
+                        else if (token == QLatin1String("Super")) modifiers |= Qt::MetaModifier;
                         else key = token;
                     }
                     if (!key.isEmpty()) {
@@ -269,26 +471,40 @@ QMenu *GlobalMenuHelper::buildNativeMenu(const QVariantMap &node)
                     }
                 }
             }
-            connect(action, &QAction::triggered, this, [this, itemId]() {
-                // Call ExecuteItem SYNCHRONOUSLY while the popup is still open.
-                //
-                // Timing matters on Wayland multi-monitor setups: when the panel popup closes,
-                // the Wayland compositor restores keyboard focus to the last-focused window on
-                // the SAME monitor as the panel (e.g. window D6 on monitor 2), NOT to the
-                // source window (e.g. window B1 on monitor 1). Brave routes dbusmenu events by
-                // its internally-focused window, so an async dispatch after popup-close always
-                // fires on D6 even though the user clicked from B1's menu.
-                //
-                // While the popup is still open no Brave window has received wl_keyboard.enter
-                // yet, so Brave's internal focus is still on B1. By calling ExecuteItem before
-                // the popup closes (QDBus::Block = synchronous round-trip), the action arrives
-                // at the service and is dispatched to Brave while B1 is still focused.
-                QDBusInterface iface(
-                    QStringLiteral("com.kde.GlobalMMMenu"),
-                    QStringLiteral("/com/kde/GlobalMMMenu"),
-                    QStringLiteral("com.kde.GlobalMMMenu"));
-                iface.call(QDBus::Block, QStringLiteral("ExecuteItem"), itemId);
-            });
+
+            if (isDirectMode) {
+                // Direct mode: send Event("clicked") to the application's dbusmenu.
+                // The "data" parameter must be a D-Bus variant (type 'v'), so wrap
+                // the zero value in QDBusVariant; sending a plain QVariant(int)
+                // produces type 'i' which some implementations (e.g. Konsole) reject.
+                const QString svc  = m_directMenuService;
+                const QString path = m_directMenuPath;
+                connect(action, &QAction::triggered, this, [svc, path, itemId]() {
+                    QDBusInterface iface(svc, path,
+                        QStringLiteral("com.canonical.dbusmenu"),
+                        QDBusConnection::sessionBus());
+                    const quint32 ts = static_cast<quint32>(
+                        QDateTime::currentMSecsSinceEpoch() / 1000);
+                    iface.call(QDBus::AutoDetect,
+                        QStringLiteral("Event"),
+                        itemId,
+                        QStringLiteral("clicked"),
+                        QVariant::fromValue(QDBusVariant(QVariant(0))),
+                        ts);
+                });
+            } else {
+                // Service mode: ExecuteItem on the C# service.
+                // Must be synchronous (QDBus::Block) — see detailed comment
+                // in the original implementation for the Wayland focus-race rationale.
+                connect(action, &QAction::triggered, this, [itemId]() {
+                    QDBusInterface iface(
+                        QStringLiteral("com.kde.GlobalMMMenu"),
+                        QStringLiteral("/com/kde/GlobalMMMenu"),
+                        QStringLiteral("com.kde.GlobalMMMenu"));
+                    iface.call(QDBus::Block, QStringLiteral("ExecuteItem"), itemId);
+                });
+            }
+
             menu->addAction(action);
         }
     }
@@ -305,13 +521,14 @@ QString GlobalMenuHelper::cleanLabel(const QString &s)
         const QChar c = s[i];
         if ((c == QLatin1Char('&') || c == QLatin1Char('_')) && i + 1 < s.size()) {
             if (s[i + 1] == c) {
-                r += c;   // doubled delimiter → keep one literal
+                r += c;
                 ++i;
             }
-            // else: single mnemonic marker → skip
         } else {
             r += c;
         }
     }
     return r;
 }
+
+

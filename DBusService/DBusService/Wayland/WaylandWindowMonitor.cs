@@ -5,29 +5,20 @@ using Tmds.DBus;
 namespace DBusService.Wayland;
 
 /// <summary>
-/// Wayland-session implementation of <see cref="IActiveWindowMonitor"/> for KWin 5 / Plasma 5.
+/// Wayland-session implementation of <see cref="IActiveWindowMonitor"/>.
+/// Supports both KWin 5 (Plasma 5) and KWin 6 (Plasma 6).
 ///
-/// Loads a KWin JavaScript script via <c>org.kde.kwin.Scripting</c> that listens
-/// for <c>workspace.clientActivated</c> events (KWin 5 API).  The script uses KWin's
-/// <c>callDBus</c> to invoke <see cref="WindowActivatedAsync"/> on this object,
-/// which is registered on the session bus at <see cref="CallbackPath"/>.
+/// Loads a KWin JavaScript script via <c>org.kde.kwin.Scripting</c> that fires a
+/// D-Bus callback (<see cref="WindowActivatedAsync"/>) on every window focus change.
 ///
-/// Because this class is also the D-Bus callback receiver it implements
-/// <see cref="IKWinWindowCallback"/> and is registered with
-/// <c>connection.RegisterObjectAsync</c> before the KWin script is loaded, so
-/// no events are missed.
+/// KWin 5 uses <c>workspace.clientActivated</c>; KWin 6 uses
+/// <c>workspace.windowActivated</c>.  The correct script variant is selected at
+/// runtime by probing the scripting interface: if <c>isScriptLoaded</c> is absent
+/// we are on KWin 6.
 ///
-/// Window IDs come directly from KWin's <c>client.windowId</c> (a numeric integer).
-/// For XWayland windows this is the X11 window ID; for native Wayland windows it is
-/// an internal KWin counter.  IDs are stable for the lifetime of the KWin session.
-///
-/// Menu service/path associations (equivalent to _KDE_NET_WM_APPMENU_* atoms on
-/// X11) are stored in an in-process concurrent dictionary because Wayland does not
-/// have per-window X11 properties.
-///
-/// PID lookup: the KWin script passes <c>client.pid</c> directly in the callback.
-/// For XWayland windows the PID may be 0 — callers should fall back to AT-SPI's
-/// PID resolution in that case.
+/// In KWin 6 windows do not expose an X11 <c>windowId</c> — only a UUID
+/// <c>internalId</c>.  The C# callback hashes the UUID to a stable <c>uint</c>
+/// with bit 31 set so it does not collide with real X11 IDs.
 /// </summary>
 public sealed class WaylandWindowMonitor : IActiveWindowMonitor, IKWinWindowCallback
 {
@@ -41,7 +32,10 @@ public sealed class WaylandWindowMonitor : IActiveWindowMonitor, IKWinWindowCall
     private readonly ILogger    _logger;
     private          IKWinScripting? _scripting;
 
-    // All window IDs seen since monitor start (populated on each clientActivated callback).
+    // True when probed KWin is version 6 (isScriptLoaded / start are absent).
+    private bool _isKWin6;
+
+    // All window IDs seen since monitor start.
     private readonly ConcurrentDictionary<uint, byte> _seenIds = new();
 
     // In-memory menu-info storage (replaces _KDE_NET_WM_APPMENU_* X11 atoms).
@@ -54,7 +48,6 @@ public sealed class WaylandWindowMonitor : IActiveWindowMonitor, IKWinWindowCall
 
     public event Action<(uint WindowId, string? AppmenuService, string? AppmenuPath)>? ActiveWindowChanged;
 
-    // IDBusObject — required to register this object with connection.RegisterObjectAsync.
     public ObjectPath ObjectPath => new(CallbackPath);
 
     public WaylandWindowMonitor(Connection connection, ILogger logger)
@@ -65,22 +58,13 @@ public sealed class WaylandWindowMonitor : IActiveWindowMonitor, IKWinWindowCall
 
     // ── IActiveWindowMonitor ─────────────────────────────────────────────────
 
-    /// <summary>
-    /// Creates KWin D-Bus proxies and registers this object as the callback receiver.
-    /// No KWin round-trips are made here — all blocking D-Bus calls happen in
-    /// <see cref="RunEventLoop"/> which runs on a dedicated <c>Task.Run</c> thread
-    /// (safe for <c>.GetAwaiter().GetResult()</c>; no SynchronizationContext deadlock).
-    /// </summary>
     public bool Connect()
     {
         try
         {
             _logger.LogInformation("[Wayland] Creating KWin D-Bus proxies...");
-            // CreateProxy is purely local — no D-Bus round-trip.
             _scripting = _connection.CreateProxy<IKWinScripting>("org.kde.KWin", new ObjectPath("/Scripting"));
 
-            // Register this object as the D-Bus receiver BEFORE RunEventLoop loads the
-            // script, so that early windowActivated callbacks are not missed.
             _connection.RegisterObjectAsync(this).GetAwaiter().GetResult();
             _logger.LogInformation("[Wayland] Callback receiver registered at {P}", CallbackPath);
             return true;
@@ -94,16 +78,14 @@ public sealed class WaylandWindowMonitor : IActiveWindowMonitor, IKWinWindowCall
         }
     }
 
-    /// <summary>
-    /// Loads the KWin monitor script (blocking KWin round-trips are safe here because
-    /// this method runs on the <c>Task.Run</c> thread created by Worker), then blocks
-    /// on <paramref name="cancellationToken"/>.  Cleans up the script on exit.
-    /// </summary>
     public void RunEventLoop(CancellationToken cancellationToken)
     {
-        _logger.LogInformation("[Wayland] Active window monitor starting — loading KWin script...");
+        _logger.LogInformation("[Wayland] Active window monitor starting — detecting KWin version...");
         try
         {
+            DetectKWinVersion();
+            _logger.LogInformation("[Wayland] Detected KWin {V} — loading monitor script...",
+                _isKWin6 ? "6 (Plasma 6)" : "5 (Plasma 5)");
             LoadKWinScript();
             _logger.LogInformation("[Wayland] KWin script active — waiting for windowActivated events");
             cancellationToken.WaitHandle.WaitOne();
@@ -119,13 +101,8 @@ public sealed class WaylandWindowMonitor : IActiveWindowMonitor, IKWinWindowCall
         _logger.LogInformation("[Wayland] Active window monitor stopped");
     }
 
-    // ── IKWinWindowCallback (D-Bus method called by the KWin script) ─────────
+    // ── IKWinWindowCallback ──────────────────────────────────────────────────
 
-    /// <summary>
-    /// Called by the KWin JavaScript monitor script via <c>callDBus</c> each time
-    /// <c>workspace.clientActivated</c> fires.  Fires <see cref="ActiveWindowChanged"/>
-    /// on the monitor so the <c>Worker</c> can handle it identically to X11.
-    /// </summary>
     public Task WindowActivatedAsync(string windowId, string pid, string caption, string internalId, string gx, string gy)
     {
         if (!uint.TryParse(windowId, out var rawId)) return Task.CompletedTask;
@@ -136,48 +113,41 @@ public sealed class WaylandWindowMonitor : IActiveWindowMonitor, IKWinWindowCall
         uint id;
         if (rawId != 0)
         {
-            // X11 or XWayland window — use the real window ID directly.
             id = rawId;
         }
         else if (!string.IsNullOrEmpty(internalId))
         {
-            // KWin provided a UUID string — hash it to a stable uint.
+            // KWin UUID → stable uint (FNV-1a hash), bit 31 set to avoid X11 collision.
             uint hash = 2166136261u;
             foreach (var c in internalId) { hash ^= (byte)c; hash *= 16777619u; }
             id = 0x80000000u | (hash & 0x7FFFFFFFu);
         }
         else if (pidVal != 0 && (gxVal != 0 || gyVal != 0))
         {
-            // Native Wayland, no internalId: use PID + window position to discriminate
-            // multiple windows of the same app.  Position (gx, gy) is unique per window
-            // on screen and stable between focus events as long as the window is not moved.
-            // FNV-1a mix of pid, gx, gy → stable uint with bit 31 set.
             uint hash = 2166136261u;
-            hash ^= (byte)(pidVal)        ; hash *= 16777619u;
-            hash ^= (byte)(pidVal >> 8)   ; hash *= 16777619u;
-            hash ^= (byte)(pidVal >> 16)  ; hash *= 16777619u;
-            hash ^= (byte)(pidVal >> 24)  ; hash *= 16777619u;
-            hash ^= (byte)(gxVal)         ; hash *= 16777619u;
-            hash ^= (byte)(gxVal >> 8)    ; hash *= 16777619u;
-            hash ^= (byte)(gyVal)         ; hash *= 16777619u;
-            hash ^= (byte)(gyVal >> 8)    ; hash *= 16777619u;
+            hash ^= (byte)(pidVal)      ; hash *= 16777619u;
+            hash ^= (byte)(pidVal >> 8) ; hash *= 16777619u;
+            hash ^= (byte)(pidVal >> 16); hash *= 16777619u;
+            hash ^= (byte)(pidVal >> 24); hash *= 16777619u;
+            hash ^= (byte)(gxVal)       ; hash *= 16777619u;
+            hash ^= (byte)(gxVal >> 8)  ; hash *= 16777619u;
+            hash ^= (byte)(gyVal)       ; hash *= 16777619u;
+            hash ^= (byte)(gyVal >> 8)  ; hash *= 16777619u;
             id = 0x80000000u | (hash & 0x7FFFFFFFu);
         }
         else if (pidVal != 0)
         {
-            // Last resort: PID only (old behaviour, collapses multi-window apps).
             id = 0x80000000u | (pidVal & 0x7FFFFFFFu);
         }
         else
         {
-            _logger.LogDebug("[Wayland] clientActivated: windowId=0 and no discriminator — ignoring");
+            _logger.LogDebug("[Wayland] windowActivated: no usable ID — ignoring");
             return Task.CompletedTask;
         }
 
         _lastActiveId = id;
         _seenIds[id]  = 0;
 
-        // Cache the pid, caption, and geometry directly from the script (avoids any D-Bus round-trip).
         if (pidVal != 0 || !string.IsNullOrEmpty(caption) || gxVal != 0 || gyVal != 0)
         {
             var cap = string.IsNullOrEmpty(caption) ? null : caption;
@@ -187,8 +157,8 @@ public sealed class WaylandWindowMonitor : IActiveWindowMonitor, IKWinWindowCall
         }
 
         var (svc, path) = GetWindowMenuInfo((IntPtr)id);
-        _logger.LogInformation("[Wayland] clientActivated windowId={RawId} id=0x{I:X8} pid={P} geo=({GX},{GY}) caption={C}",
-            rawId, id, pidVal, gxVal, gyVal, caption);
+        _logger.LogInformation("[Wayland] windowActivated rawId={RawId} id=0x{I:X8} pid={P} geo=({GX},{GY}) iid={IID} caption={C}",
+            rawId, id, pidVal, gxVal, gyVal, internalId, caption);
         ActiveWindowChanged?.Invoke((id, svc, path));
         return Task.CompletedTask;
     }
@@ -196,12 +166,6 @@ public sealed class WaylandWindowMonitor : IActiveWindowMonitor, IKWinWindowCall
     // ── IActiveWindowMonitor ─────────────────────────────────────────────────
 
     public uint GetActiveWindow() => _lastActiveId;
-
-    /// <summary>
-    /// Returns all window IDs seen since the monitor started.
-    /// On Wayland there is no equivalent of _NET_CLIENT_LIST, so this reflects
-    /// only windows that were active at some point during the current session.
-    /// </summary>
     public uint[] GetAllClientWindows() => [.. _seenIds.Keys];
 
     public string? GetWindowName(IntPtr window)
@@ -212,10 +176,6 @@ public sealed class WaylandWindowMonitor : IActiveWindowMonitor, IKWinWindowCall
         return null;
     }
 
-    /// <summary>
-    /// Returns the screen-space top-left position of the window as reported by KWin's
-    /// c.geometry.x/y in the script callback.  Used for geometry-based AT-SPI window selection.
-    /// </summary>
     public (int Gx, int Gy) GetWindowGeometry(IntPtr window)
     {
         var id = (uint)window;
@@ -224,11 +184,6 @@ public sealed class WaylandWindowMonitor : IActiveWindowMonitor, IKWinWindowCall
         return (-1, -1);
     }
 
-    /// <summary>
-    /// Returns the PID for a window.  Populated directly from <c>client.pid</c> in the
-    /// KWin 5 script callback.  May be 0 for XWayland windows — callers should fall back
-    /// to AT-SPI's PID resolution.
-    /// </summary>
     public uint GetWindowPid(IntPtr window)
     {
         var id = (uint)window;
@@ -251,50 +206,119 @@ public sealed class WaylandWindowMonitor : IActiveWindowMonitor, IKWinWindowCall
     // ── Private helpers ──────────────────────────────────────────────────────
 
     /// <summary>
-    /// Writes the KWin monitor script to a temp file, unloads any leftover
-    /// instance from a prior service run, then loads and starts the new script.
+    /// Determines whether KWin is version 5 or 6 by probing for the
+    /// <c>isScriptLoaded</c> method (present in KWin 5, removed in KWin 6).
+    /// Sets <see cref="_isKWin6"/> accordingly.
     /// </summary>
-    private void LoadKWinScript()
+    private void DetectKWinVersion()
     {
-        // Unload any stale script from a previous service run BEFORE loading the new one.
-        // We check isScriptLoaded first rather than blindly calling unloadScript:
-        // if the script was not loaded, unloadScript in KWin 5 may never reply, causing
-        // GetResult() to hang indefinitely. isScriptLoaded always replies promptly.
         try
         {
-            var isLoadedTask = _scripting!.isScriptLoadedAsync(ScriptPluginName);
-            if (isLoadedTask.Wait(TimeSpan.FromSeconds(5)) && isLoadedTask.Result)
+            // KWin 5 responds with a bool; KWin 6 responds with an error
+            // "org.freedesktop.DBus.Error.UnknownMethod".
+            var task = _scripting!.isScriptLoadedAsync("__probe__");
+            if (task.Wait(TimeSpan.FromSeconds(3)))
             {
-                _logger.LogInformation("[Wayland] Unloading stale script '{P}'...", ScriptPluginName);
-                var unloadTask = _scripting!.unloadScriptAsync(ScriptPluginName);
-                if (!unloadTask.Wait(TimeSpan.FromSeconds(5)))
-                    _logger.LogWarning("[Wayland] unloadScript timed out — proceeding anyway");
-                else
-                    _logger.LogInformation("[Wayland] Stale script unloaded");
+                _isKWin6 = false;  // KWin 5: call succeeded
+            }
+            else
+            {
+                // Timeout — treat as KWin 6 (or unresponsive, script won't work anyway)
+                _isKWin6 = true;
             }
         }
         catch (Exception ex)
         {
-            _logger.LogDebug("[Wayland] isScriptLoaded check error: {M}", ex.Message);
+            // Any error (including "UnknownMethod") → KWin 6
+            _logger.LogDebug("[Wayland] isScriptLoaded probe error ({M}) → assuming KWin 6", ex.Message);
+            _isKWin6 = true;
+        }
+    }
+
+    /// <summary>
+    /// Generates the KWin monitor script appropriate for the detected KWin version,
+    /// writes it to a temp file, unloads any stale instance, then loads it.
+    /// </summary>
+    private void LoadKWinScript()
+    {
+        // ── Stale script cleanup ─────────────────────────────────────────────
+        // KWin 5: use isScriptLoaded to check before unloading (unloadScript hangs
+        //         indefinitely if the script is not loaded).
+        // KWin 6: isScriptLoaded does not exist — just try unloadScript and ignore errors.
+        if (_isKWin6)
+        {
+            try
+            {
+                var unloadTask = _scripting!.unloadScriptAsync(ScriptPluginName);
+                if (!unloadTask.Wait(TimeSpan.FromSeconds(3)))
+                    _logger.LogDebug("[Wayland] KWin6 pre-unload timed out (non-fatal)");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug("[Wayland] KWin6 pre-unload error (non-fatal): {M}", ex.Message);
+            }
+        }
+        else
+        {
+            try
+            {
+                var isLoadedTask = _scripting!.isScriptLoadedAsync(ScriptPluginName);
+                if (isLoadedTask.Wait(TimeSpan.FromSeconds(5)) && isLoadedTask.Result)
+                {
+                    _logger.LogInformation("[Wayland] Unloading stale KWin5 script '{P}'...", ScriptPluginName);
+                    var unloadTask = _scripting!.unloadScriptAsync(ScriptPluginName);
+                    if (!unloadTask.Wait(TimeSpan.FromSeconds(5)))
+                        _logger.LogWarning("[Wayland] unloadScript timed out — proceeding anyway");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug("[Wayland] KWin5 isScriptLoaded check error: {M}", ex.Message);
+            }
         }
 
-        // KWin 5 Wayland: workspace.clientActivated fires for all windows.
-        // c.windowId = X11/XWayland ID (a JavaScript number) for X11 windows, OR
-        //            = undefined (not 0) for native Wayland windows.
-        // c.internalId = a UUID *string* like "{4898dcbd-...}" — NOT usable as a uint.
-        // c.pid        = numeric PID — always present and non-zero.
-        // c.caption    = window title string — used for display and fallback matching.
-        //
-        // Strategy: pass (c.windowId || 0) as wid — gives 0 for Wayland-native windows.
-        // Also pass c.x and c.y (top-left corner of the window frame in screen coordinates).
-        // These are unique per window on screen and stable between focus events as long as
-        // the window is not moved.  C# combines them with the PID into a stable synthetic ID
-        // when wid==0, replacing the old pid-only ID that mapped every Brave window to the same ID.
-        // internalId is also passed (empty string if unavailable in this KWin version).
-        // All values passed as strings to avoid int32/uint32 D-Bus type mismatch.
-        // Tmds.DBus strips "Async" from WindowActivatedAsync → D-Bus method "WindowActivated".
-        // Use $@"..." (verbatim interpolated): "" → literal quote, {{ / }} → literal brace.
-        var script = $@"workspace.clientActivated.connect(function(c) {{
+        // ── Generate the appropriate script ──────────────────────────────────
+        string script = _isKWin6 ? BuildKWin6Script() : BuildKWin5Script();
+
+        _logger.LogInformation("[Wayland] Writing {V} script to {P}",
+            _isKWin6 ? "KWin6" : "KWin5", ScriptTempPath);
+        File.WriteAllText(ScriptTempPath, script);
+
+        // ── Load the script ──────────────────────────────────────────────────
+        _logger.LogInformation("[Wayland] Calling loadScript (5 s timeout)...");
+        var loadTask = _scripting!.loadScriptAsync(ScriptTempPath, ScriptPluginName);
+        if (!loadTask.Wait(TimeSpan.FromSeconds(5)))
+        {
+            _logger.LogError("[Wayland] loadScript timed out — KWin did not reply. " +
+                             "Wayland window events will not be detected.");
+            return;
+        }
+        _logger.LogInformation("[Wayland] loadScript returned id={Id}", loadTask.Result);
+
+        // ── KWin 5 only: call start() ────────────────────────────────────────
+        // KWin 6 removed start() — scripts run automatically after loadScript.
+        if (!_isKWin6)
+        {
+            _logger.LogInformation("[Wayland] Calling start() (KWin5)...");
+            var startTask = _scripting.startAsync();
+            if (!startTask.Wait(TimeSpan.FromSeconds(5)))
+                _logger.LogWarning("[Wayland] start() timed out (non-fatal — script may still run)");
+            else
+                _logger.LogInformation("[Wayland] start() returned — KWin5 monitor active");
+        }
+        else
+        {
+            _logger.LogInformation("[Wayland] KWin6: no start() needed — monitor active");
+        }
+    }
+
+    /// <summary>
+    /// KWin 5 (Plasma 5) script.
+    /// Uses <c>workspace.clientActivated</c> signal and <c>client.windowId</c>,
+    /// <c>client.geometry</c>, <c>client.internalId</c>.
+    /// </summary>
+    private string BuildKWin5Script() =>
+        $@"workspace.clientActivated.connect(function(c) {{
     if (!c) return;
     var wid = c.windowId || 0;
     var iid = (typeof c.internalId === 'string') ? c.internalId : String(c.internalId || '');
@@ -309,30 +333,30 @@ public sealed class WaylandWindowMonitor : IActiveWindowMonitor, IKWinWindowCall
 }});
 ";
 
-        _logger.LogInformation("[Wayland] Writing script to {P}", ScriptTempPath);
-        File.WriteAllText(ScriptTempPath, script);
-
-        _logger.LogInformation("[Wayland] Calling loadScript (5 s timeout)...");
-        var loadTask = _scripting!.loadScriptAsync(ScriptTempPath, ScriptPluginName);
-        if (!loadTask.Wait(TimeSpan.FromSeconds(5)))
-        {
-            _logger.LogError("[Wayland] loadScript timed out — KWin did not reply. " +
-                             "Wayland window events will not be detected.");
-            return;
-        }
-        _logger.LogInformation("[Wayland] loadScript returned id={Id}", loadTask.Result);
-
-        _logger.LogInformation("[Wayland] Calling start...");
-        var startTask = _scripting.startAsync();
-        if (!startTask.Wait(TimeSpan.FromSeconds(5)))
-            _logger.LogWarning("[Wayland] start() timed out (non-fatal — script may still run)");
-        else
-            _logger.LogInformation("[Wayland] start() returned — monitor active");
-    }
+    /// <summary>
+    /// KWin 6 (Plasma 6) script.
+    /// Uses <c>workspace.windowActivated</c> signal (renamed from clientActivated).
+    /// KWin 6 exposes no X11 <c>windowId</c> — only <c>internalId</c> (UUID string).
+    /// Position comes from <c>w.pos</c> (replaces <c>w.geometry</c> which no longer
+    /// exists in the KWin 6 scripting API).
+    /// </summary>
+    private string BuildKWin6Script() =>
+        $@"workspace.windowActivated.connect(function(w) {{
+    if (!w) return;
+    var iid = String(w.internalId || '');
+    var gx  = w.pos ? w.pos.x : (w.frameGeometry ? w.frameGeometry.x : 0);
+    var gy  = w.pos ? w.pos.y : (w.frameGeometry ? w.frameGeometry.y : 0);
+    callDBus(
+        ""com.kde.GlobalMMMenu"", ""{CallbackPath}"",
+        ""com.kde.GlobalMMMenu.WindowMonitor"", ""WindowActivated"",
+        ""0"", String(w.pid || 0), String(w.caption || ''), iid,
+        String(gx), String(gy)
+    );
+}});
+";
 
     private void CleanupScript()
     {
-        // Best-effort unload — fire-and-forget for the same reason as in LoadKWinScript.
         _ = _scripting?.unloadScriptAsync(ScriptPluginName);
         try { if (File.Exists(ScriptTempPath)) File.Delete(ScriptTempPath); } catch { }
     }

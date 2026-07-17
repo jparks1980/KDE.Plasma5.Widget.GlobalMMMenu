@@ -1,4 +1,6 @@
 {
+    "KPackageStructure": "Plasma/Applet",
+    "X-Plasma-API-Minimum-Version": "6.0",
     "KPlugin": {
         "Authors": [
             {
@@ -12,11 +14,6 @@
         "Id": "com.kde.plasma.globalmmenu",
         "License": "GPL-2.0-or-later",
         "Name": "Global MM Menu",
-        "ServiceTypes": [
-            "Plasma/Applet"
-        ],
         "Version": "1.0"
-    },
-    "X-Plasma-API": "declarativeappletscript",
-    "X-Plasma-MainScript": "ui/main.qml"
+    }
 }
