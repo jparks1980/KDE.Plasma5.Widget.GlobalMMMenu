@@ -2,7 +2,7 @@
 
 A KDE Plasma widget that displays a native global menu bar for the active window, using a C# DBus service to monitor window focus and fetch menus, plus a C++ QML plugin to render them as real native Qt menus.
 
-Supports both **X11** and **Wayland** (KDE/KWin 5) sessions.
+Supports both **X11** and **Wayland** sessions on **KDE Plasma 5 and 6**.
 
 ## Overview
 
@@ -19,7 +19,7 @@ KDE Plasma's built-in global menu applet requires apps to export their menus via
 ```
 Window focus change
   X11:     _NET_ACTIVE_WINDOW event (event-driven, no polling)
-  Wayland: KWin D-Bus clientActivated callback via kwin script
+  Wayland: KWin D-Bus clientActivated callback via a KWin script
         │
         ▼
 IActiveWindowMonitor (C#)
@@ -30,7 +30,7 @@ IActiveWindowMonitor (C#)
         │     Previously-seen windows go straight to their known provider.  │
         │                                                                   │
         ├─ 2. com.canonical.AppMenu.Registrar (live registry)               │
-        │     Qt/KDE apps call RegisterWindow — kded5-appmenu bridges       │
+        │     Qt/KDE apps call RegisterWindow — kded5/6-appmenu bridges     │
         │     the Wayland appmenu-v1 protocol to this registrar for us.     │
         │                                                                   │
         ├─ 3. Window menu properties                                        │
@@ -80,10 +80,9 @@ Plasma panel widget (QML)  shows menu buttons, calls openNativeMenu()
 ## Requirements
 
 ### Runtime
-- KDE Plasma 5.x on X11 or Wayland
-- .NET 10 runtime (`dotnet-runtime-10`)
-- Qt5 (`libqt5qml5`, `libqt5widgets5`)
-- `kded5` with the `appmenu` module (standard in KDE Plasma 5)
+- KDE Plasma 5.x or 6.x on X11 or Wayland
+- The matching Qt runtime (provided by Plasma)
+- `kded5` or `kded6`, with the matching `appmenu` module
 - `appmenu-gtk3-module` — for GTK app menus on X11 (Firefox, Thunderbird, etc.)
   > **Note:** On native Wayland, GTK3/4 apps (e.g. HandBrake) use the `org.gtk.Menus`
   > GMenuModel protocol instead. This is handled automatically without any extra module.
@@ -92,15 +91,18 @@ Plasma panel widget (QML)  shows menu buttons, calls openNativeMenu()
 ### Build
 - .NET 10 SDK (`dotnet-sdk-10`)
 - CMake ≥ 3.16
-- Qt5 development headers: `qtbase5-dev qtdeclarative5-dev qtquickcontrols2-5-dev`
+- Plasma 5: Qt5 development headers: `qtbase5-dev qtdeclarative5-dev`
+- Plasma 6: Qt6 development headers: `qt6-base-dev qt6-declarative-dev`
 - `build-essential`
 
 ```bash
-# Install build dependencies (Ubuntu/Kubuntu)
+# Install build dependencies for Plasma 6 (Ubuntu/Kubuntu)
 sudo apt install cmake build-essential dotnet-sdk-10 \
-    qtbase5-dev qtdeclarative5-dev \
+  qt6-base-dev qt6-declarative-dev \
     appmenu-gtk3-module appmenu-registrar
 ```
+
+For Plasma 5, replace the Qt6 packages with `qtbase5-dev qtdeclarative5-dev`.
 
 ---
 
@@ -115,7 +117,7 @@ cd GlobalMMMenu
 ```
 
 This will:
-1. Build and install the C++ QML plugin (requires `sudo` for the system Qt path)
+1. Detect Plasma 5 or 6 and build/install the matching Qt C++ QML plugin (requires `sudo` for the system Qt path)
 2. Install the Plasma plasmoid
 3. Build and publish the C# DBus service as a self-contained binary at `/usr/local/bin/globalmmmenu`, along with its required `appsettings.json`
 4. Install and enable a **systemd user service** that auto-starts with your graphical session
@@ -230,7 +232,7 @@ Once a window's menu provider is confirmed, the result is stored in a per-sessio
 The cache is cleared on `StaleMenuPathException` (app restarted) so stale entries don't persist.
 
 ### 2. Live registrar registry
-Qt/KDE apps register via `com.canonical.AppMenu.Registrar`. On **Wayland**, apps use the `appmenu-v1` Wayland protocol — KWin notifies `kded5-appmenu`, which bridges it and calls `RegisterWindow` on our registrar. On service startup, `kded5-appmenu` is sent a `reconfigure()` signal so it re-registers any windows that started before the service.
+Qt/KDE apps register via `com.canonical.AppMenu.Registrar`. On **Wayland**, apps use the `appmenu-v1` Wayland protocol — KWin notifies the matching `kded5-appmenu` or `kded6-appmenu` module, which bridges it and calls `RegisterWindow` on our registrar. On service startup, the module is sent a `reconfigure()` signal so it re-registers any windows that started before the service.
 
 ### 3. Window menu properties
 `_KDE_NET_WM_APPMENU_SERVICE_NAME` and `_KDE_NET_WM_APPMENU_OBJECT_PATH` on X11 — written by the app at startup and persisted in the X server. On Wayland these are stored in an in-process dictionary. The service also writes these back after successful PID discovery so subsequent focus events resolve instantly.
@@ -252,7 +254,7 @@ The full menu tree is fetched recursively via `org.gtk.Menus.Start()` subscripti
 
 ## AT-SPI Menu Features
 
-AT-SPI is used as a **fallback** for apps that don't export a dbusmenu object (e.g. some Electron apps, legacy GTK2 apps). Native KDE/Qt apps on Wayland use dbusmenu via `kded5-appmenu` and do not require AT-SPI.
+AT-SPI is used as a **fallback** for apps that don't export a dbusmenu object (e.g. some Electron apps, legacy GTK2 apps). Native KDE/Qt apps on Wayland use dbusmenu via the matching `kded5-appmenu` or `kded6-appmenu` module and do not require AT-SPI.
 
 | Feature | Available via AT-SPI | Notes |
 |---|---|---|
@@ -267,19 +269,28 @@ AT-SPI is used as a **fallback** for apps that don't export a dbusmenu object (e
 
 ## Wayland Prerequisites
 
-On Wayland, KDE/Qt apps export their menus via the **Wayland `appmenu-v1` protocol**, which `kded5-appmenu` bridges to `com.canonical.AppMenu.Registrar`. For this to work:
+On Wayland, KDE/Qt apps export their menus via the **Wayland `appmenu-v1` protocol**, which the matching `kded5-appmenu` or `kded6-appmenu` module bridges to `com.canonical.AppMenu.Registrar`. For this to work:
 
 1. **Apps must have their menu bar enabled.** If a previous global menu applet was active (KDE's own or another tool), it may have set `MenuBar=Disabled` in app config files, hiding the menu bar. Re-enable it with:
    ```bash
-   kwriteconfig5 --file konsolerc   --group MainWindow --key MenuBar Enabled
-   kwriteconfig5 --file dolphinrc   --group MainWindow --key MenuBar Enabled
+  # Plasma 5
+  kwriteconfig5 --file konsolerc   --group MainWindow --key MenuBar Enabled
+  kwriteconfig5 --file dolphinrc   --group MainWindow --key MenuBar Enabled
+
+  # Plasma 6
+  kwriteconfig6 --file konsolerc   --group MainWindow --key MenuBar Enabled
+  kwriteconfig6 --file dolphinrc   --group MainWindow --key MenuBar Enabled
    # Repeat for any other affected KDE apps
    ```
    Then reopen the affected apps.
 
-2. **`kded5` appmenu module must be loaded** (it is by default in Plasma 5):
+2. **The matching `kded` appmenu module must be loaded** (it is enabled by default):
    ```bash
-   qdbus org.kde.kded5 /kded org.kde.kded5.loadedModules | grep appmenu
+  # Plasma 5
+  qdbus org.kde.kded5 /kded org.kde.kded5.loadedModules | grep appmenu
+
+  # Plasma 6
+  qdbus6 org.kde.kded6 /kded org.kde.kded6.loadedModules | grep appmenu
    # expected output: appmenu
    ```
 
